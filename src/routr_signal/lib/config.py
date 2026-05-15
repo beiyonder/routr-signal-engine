@@ -39,6 +39,16 @@ def hn_config() -> dict[str, Any]:
     return _load_yaml(config_dir() / "hn.yaml")
 
 
+@lru_cache(maxsize=1)
+def twitter_watch() -> dict[str, Any]:
+    """X/Twitter source config. Returns {} if file is absent (source becomes a no-op)."""
+
+    path = config_dir() / "twitter_watch.yaml"
+    if not path.exists():
+        return {}
+    return _load_yaml(path)
+
+
 @lru_cache(maxsize=None)
 def prompt(name: str) -> str:
     """Load a system prompt from config/prompts/<name>.md."""

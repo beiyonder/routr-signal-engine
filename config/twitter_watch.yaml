@@ -1,0 +1,39 @@
+# X / Twitter watchlist.
+#
+# `searches` are keyword queries; we fetch the latest tweets (no engagement
+# filter — quantity helps the cosine prefilter pick winners).
+# `users` are screen-name handles; we fetch each user's most recent N tweets.
+#
+# Keep this list lean. X is the most expensive source per request (slow,
+# heavily anti-bot) and rate limits punish multiplication.
+
+fetch:
+  max_search_results: 12        # per query
+  max_user_tweets: 8            # per user
+  search_product: Latest        # Latest | Top | People | Photos | Videos
+  request_delay_seconds: 30     # between requests, to stay polite
+  total_max_items: 80           # hard cap per run
+
+searches:
+  - "litellm bug"
+  - "openrouter latency"
+  - "langfuse vs helicone"
+  - "llm gateway production"
+  - "portkey vs litellm"
+  - "anthropic rate limit"
+  - "claude api timeout"
+  - "claude haiku latency"
+
+# Practitioner accounts that consistently post on LLM infra / agents / tools.
+# Watch them not for promotional content but for in-the-moment pain ("X went
+# down again", "this API change broke our pipeline").
+users:
+  - simonw           # Simon Willison
+  - HamelHusain      # Hamel Husain (LLM evals)
+  - swyx             # Latent Space / AI Engineer
+  - jeremyphoward    # fast.ai
+  - karpathy         # Andrej Karpathy
+  - hwchase17        # Harrison Chase (LangChain CEO)
+  - jxnlco           # Jason Liu (Instructor)
+  - rasbt            # Sebastian Raschka
+  - vboykis          # Vicki Boykis

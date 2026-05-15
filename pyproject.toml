@@ -15,12 +15,21 @@ dependencies = [
     "feedparser>=6.0.11",
     "pyyaml>=6.0.2",
     "python-dateutil>=2.9.0",
+    "twikit>=2.3.0",
+    "playwright>=1.49.0",
+    "pyotp>=2.9.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
+]
+# Optional: official Reddit API client. Not used by default; the Android-OAuth
+# fallback in sources/reddit.py covers our read-only needs without a registered
+# OAuth app. Enable if you ever want comment-level data or higher rate limits.
+reddit-praw = [
+    "praw>=7.7.1",
 ]
 
 [project.scripts]

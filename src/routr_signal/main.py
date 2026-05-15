@@ -23,16 +23,18 @@ from .lib.logging import error, info, warn
 from .lib.paths import raw_dir, today_utc
 from .lib.types import ClassifiedItem, Digest, Lead, RawItem
 from .output import discord, email, leads_queue, markdown_digest, slack
-from .sources import github_issues, hn, reddit
+from .sources import discord_paste, github_issues, hn, reddit, twitter
 
 
 SOURCE_REGISTRY = {
     "hn": hn.fetch,
     "reddit": reddit.fetch,
     "github_issues": github_issues.fetch,
+    "twitter": twitter.fetch,
+    "discord_paste": discord_paste.fetch,
 }
 
-DEFAULT_SOURCES = ["hn", "reddit", "github_issues"]
+DEFAULT_SOURCES = ["hn", "reddit", "github_issues", "twitter", "discord_paste"]
 TOP_SIGNALS_FOR_DIGEST = 5
 MIN_SCORE_FOR_DIGEST = 0.55
 

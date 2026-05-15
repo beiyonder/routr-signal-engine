@@ -7,7 +7,17 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 
-Platform = Literal["hn", "reddit", "github", "x", "devto", "hf", "newsletter", "other"]
+Platform = Literal[
+    "hn",
+    "reddit",
+    "github",
+    "x",
+    "discord",
+    "devto",
+    "hf",
+    "newsletter",
+    "other",
+]
 Wedge = Literal["cold_start", "markup", "self_host", "mcp", "reliability", "other"]
 HookFormat = Literal["x_thread", "linkedin", "reddit", "hn_comment", "devto_title"]
 

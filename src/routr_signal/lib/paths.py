@@ -59,5 +59,21 @@ def raw_dir(source: str | None = None) -> Path:
     return d
 
 
+def cache_dir() -> Path:
+    d = data_dir() / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def manual_dir(subdir: str | None = None) -> Path:
+    """Local-only manual input dir (gitignored). Used by Discord paste-in source."""
+
+    d = data_dir() / "manual"
+    if subdir:
+        d = d / subdir
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
