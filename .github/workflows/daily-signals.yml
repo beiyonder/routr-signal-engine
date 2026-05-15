@@ -16,7 +16,7 @@ on:
         default: ""
 
 permissions:
-  contents: write   # for committing data/ back to the repo
+  contents: read   # pipeline state lives in Actions cache + artifacts, NOT in git
 
 concurrency:
   group: daily-signals
@@ -48,6 +48,17 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
+      - name: Restore pipeline state (dedupe + anchor embedding cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/seen
+            data/cache/anchors-*.json
+          # Use a rolling key so each run reads the most recent state and writes a new one.
+          key: pipeline-state-${{ github.run_id }}
+          restore-keys: |
+            pipeline-state-
+
       - name: Resolve runtime flags
         id: flags
         env:
@@ -56,10 +67,8 @@ jobs:
         run: |
           if [ "${INPUT_DRY_RUN}" = "true" ]; then
             echo "publish=0" >> $GITHUB_OUTPUT
-            echo "commit=0"  >> $GITHUB_OUTPUT
           else
             echo "publish=1" >> $GITHUB_OUTPUT
-            echo "commit=1"  >> $GITHUB_OUTPUT
           fi
           if [ -n "${INPUT_SOURCES}" ]; then
             echo "sources=${INPUT_SOURCES}" >> $GITHUB_OUTPUT
@@ -99,18 +108,31 @@ jobs:
           # Run-time flags
           ROUTR_SIGNAL_SOURCES:   ${{ steps.flags.outputs.sources }}
           ROUTR_SIGNAL_PUBLISH:   ${{ steps.flags.outputs.publish }}
-          ROUTR_SIGNAL_COMMIT:    ${{ steps.flags.outputs.commit }}
+          ROUTR_SIGNAL_COMMIT:    "0"   # NEVER commit data/ back to the public repo
         run: routr-signal
 
-      - name: Commit dedupe state + digest
-        if: steps.flags.outputs.commit == '1'
-        run: |
-          git config user.name  "routr-signal-engine[bot]"
-          git config user.email "actions@github.com"
-          if [ -n "$(git status --porcelain data/)" ]; then
-            git add data/
-            git commit -m "digest: $(date -u +%Y-%m-%d)"
-            git push
-          else
-            echo "No data/ changes to commit."
-          fi
+      - name: Save pipeline state to Actions cache
+        # Always save so dedupe survives even if the pipeline emitted no
+        # publishable items today. Keyed on run_id so each run writes a fresh
+        # cache entry; restore-keys: pipeline-state- picks the most recent.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/seen
+            data/cache/anchors-*.json
+          key: pipeline-state-${{ github.run_id }}
+
+      - name: Upload raw data + digest as private artifact (90-day retention)
+        # Artifacts on a public repo are downloadable only by repo collaborators
+        # via the Actions UI / `gh run download`. They are NOT in git history.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output-${{ github.run_id }}
+          path: |
+            data/digests
+            data/raw
+            data/leads
+          retention-days: 90
+          if-no-files-found: ignore

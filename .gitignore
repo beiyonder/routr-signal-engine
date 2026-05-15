@@ -52,8 +52,13 @@ data/cache/twitter-session.db
 data/cache/playwright-profile/
 # Anchor embeddings are public and SHOULD be committed (data/cache/anchors-*.json).
 
-# Outbound queue contains real handles/profiles \u2014 keep local-only on a public repo
-data/leads/queue.jsonl
+# NOTHING under data/ is committed to the public repo. Pipeline state moves
+# through Actions cache + artifacts now. Everything below is for local-only
+# inspection; the workflow on CI never touches the public git history.
+data/digests/
+data/raw/
+data/seen/
+data/leads/
 
 # Internal strategy + handoff + brainstorm docs (keep code public, strategy private)
 _handoff/
