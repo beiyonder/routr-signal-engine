@@ -147,7 +147,7 @@ def fetch() -> list[RawItem]:
         for it in items:
             if seen.has(it.id):
                 continue
-            seen.add(it.id)
+            seen.add_item(it)
             collected.append(it)
             added += 1
         debug(f"discord_paste: {f.name} -> {added} new items ({len(items)} parsed)")

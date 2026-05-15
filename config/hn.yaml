@@ -11,16 +11,18 @@ lookback_hours: 30
 
 tag_queries:
   - tag: show_hn
-    keywords: ["gateway", "proxy", "llm", "ai", "mcp", "routing", "inference"]
+    keywords: ["gateway", "proxy", "llm", "ai", "mcp", "routing", "inference", "agent", "rag"]
     max_items: 30
   - tag: ask_hn
-    keywords: ["llm", "gateway", "openrouter", "litellm", "ai infrastructure", "provider"]
+    keywords: ["llm", "gateway", "openrouter", "litellm", "ai infrastructure", "provider", "agent reliability", "rate limit"]
     max_items: 20
   - tag: front_page
     keywords: ["openrouter", "litellm", "portkey", "helicone", "llm gateway", "anthropic", "openai api", "mcp"]
     max_items: 20
 
+# Three keyword query sets, organized by theme.
 keyword_queries:
+  # Set A: direct competitor / category keywords
   - query: openrouter
     max_items: 20
   - query: litellm
@@ -29,9 +31,39 @@ keyword_queries:
     max_items: 10
   - query: helicone
     max_items: 10
+  - query: langfuse
+    max_items: 10
+  - query: bifrost llm
+    max_items: 10
   - query: llm gateway
     max_items: 20
-  - query: mcp gateway
-    max_items: 10
   - query: ai gateway
     max_items: 15
+  - query: mcp gateway
+    max_items: 10
+
+  # Set B: production-pain keywords (what actual users hit)
+  - query: claude rate limit
+    max_items: 15
+  - query: openai rate limit
+    max_items: 15
+  - query: llm cold start
+    max_items: 12
+  - query: llm proxy latency
+    max_items: 12
+  - query: inference cost
+    max_items: 15
+  - query: token budget
+    max_items: 10
+  - query: prompt caching
+    max_items: 10
+
+  # Set C: agent + rag adjacencies (broader landing pad)
+  - query: agent reliability
+    max_items: 12
+  - query: tool calling
+    max_items: 10
+  - query: structured output llm
+    max_items: 10
+  - query: rag production
+    max_items: 12

@@ -540,7 +540,7 @@ def fetch() -> list[RawItem]:
     for it in items:
         if seen.has(it.id):
             continue
-        seen.add(it.id)
+        seen.add_item(it)
         fresh.append(it)
 
     filtered = prefilter(fresh)

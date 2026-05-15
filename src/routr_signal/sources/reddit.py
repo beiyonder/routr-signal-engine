@@ -1,4 +1,4 @@
-"""Reddit source — RSS first, Android-OAuth fallback when RSS gets IP-banned.
+﻿"""Reddit source â€” RSS first, Android-OAuth fallback when RSS gets IP-banned.
 
 Three-stage fetch:
     1. Try anonymous RSS against old.reddit.com / www.reddit.com / reddit.com
@@ -95,11 +95,11 @@ def _fetch_feed(url: str, ua: str, fallback_hosts: list[str]) -> list[dict[str, 
             )
         except httpx.HTTPStatusError as e:
             last_status = f"{e.response.status_code} on {host}"
-            debug(f"reddit: {candidate} → {last_status}")
+            debug(f"reddit: {candidate} â†’ {last_status}")
             continue
         except Exception as e:  # noqa: BLE001
             last_status = f"{type(e).__name__}: {e}"
-            debug(f"reddit: {candidate} → {last_status}")
+            debug(f"reddit: {candidate} â†’ {last_status}")
             continue
 
         parsed = feedparser.parse(resp.text)
@@ -111,7 +111,7 @@ def _fetch_feed(url: str, ua: str, fallback_hosts: list[str]) -> list[dict[str, 
 
     warn(
         f"reddit: all hosts failed for {url} (last: {last_status}). "
-        "If this is persistent, see README troubleshooting → 'Reddit 403'."
+        "If this is persistent, see README troubleshooting â†’ 'Reddit 403'."
     )
     return []
 
@@ -354,7 +354,7 @@ def fetch() -> list[RawItem]:
                 continue
             if seen.has(item.id):
                 continue
-            seen.add(item.id)
+            seen.add_item(item)
             collected.append(item)
             added += 1
         debug(f"reddit: r/{name} -> {added} new items via RSS")
@@ -378,12 +378,12 @@ def fetch() -> list[RawItem]:
                         continue
                     if seen.has(item.id):
                         continue
-                    seen.add(item.id)
+                    seen.add_item(item)
                     collected.append(item)
                     added += 1
                 debug(f"reddit: r/{name} -> {added} new items via OAuth")
 
-    # Search feeds (RSS only — OAuth search needs scope we don't have)
+    # Search feeds (RSS only â€” OAuth search needs scope we don't have)
     for search in cfg.get("searches", []):
         url = search.get("url")
         if not url:
@@ -399,7 +399,7 @@ def fetch() -> list[RawItem]:
                 continue
             if seen.has(item.id):
                 continue
-            seen.add(item.id)
+            seen.add_item(item)
             collected.append(item)
             added += 1
         debug(f"reddit: search {search.get('query')!r} -> {added} new items")

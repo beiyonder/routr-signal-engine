@@ -23,17 +23,36 @@ searches:
   - "anthropic rate limit"
   - "claude api timeout"
   - "claude haiku latency"
+  - "openai rate limit production"
+  - "llm cold start lambda"
+  - "ai gateway self host"
+  - "prompt caching anthropic"
+  - "structured output llm"
+  - "tool calling broken"
+  - "mcp server production"
 
-# Practitioner accounts that consistently post on LLM infra / agents / tools.
-# Watch them not for promotional content but for in-the-moment pain ("X went
-# down again", "this API change broke our pipeline").
 users:
+  # LLM-infra builders and writers
   - simonw           # Simon Willison
-  - HamelHusain      # Hamel Husain (LLM evals)
+  - HamelHusain      # LLM evals
   - swyx             # Latent Space / AI Engineer
   - jeremyphoward    # fast.ai
-  - karpathy         # Andrej Karpathy
-  - hwchase17        # Harrison Chase (LangChain CEO)
+  - karpathy
+  - hwchase17        # LangChain CEO
   - jxnlco           # Jason Liu (Instructor)
   - rasbt            # Sebastian Raschka
   - vboykis          # Vicki Boykis
+  - eugeneyan        # Eugene Yan (Amazon, applied ML)
+  - charles_irl      # Charles Frye (Modal)
+  - LinusEkenstam    # Linus Ekenstam (AI products)
+  - mathemagic1an    # Jay Hack (AI infra)
+  - sh_reya          # Shreya Shankar (LLM evals)
+  # Founders of products in our space (signal: their public roadmap pain)
+  - akarshen         # Akarshan (Portkey)
+  - krrish_dh        # Krrish (LiteLLM)
+  - lilyandkylie     # Lily (Helicone)
+  - clxmsi           # (Langfuse)
+  - kaiyangtian      # Kaiyang (Langwatch)
+  # Adjacencies
+  - GoogleDeepMind
+  - AnthropicAI

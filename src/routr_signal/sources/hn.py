@@ -141,7 +141,7 @@ def fetch() -> list[RawItem]:
         if seen.has(item.id):
             continue
         items.append(item)
-        seen.add(item.id)
+        seen.add_item(item)
 
     filtered = prefilter(items)
     debug(f"hn: {len(items)} new items, {len(filtered)} pass keyword prefilter")

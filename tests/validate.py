@@ -179,24 +179,42 @@ def check_filters() -> None:
 
 
 def check_dedupe() -> None:
-    section("[2] dedupe (idempotence primitive)")
+    section("[2] dedupe (idempotence primitive, SQLite-backed)")
 
-    tmp_name = "_validate_seen_test"
-    seen_path = Path(__file__).resolve().parent.parent / "data" / "seen" / f"{tmp_name}.json"
-    if seen_path.exists():
-        seen_path.unlink()
+    # v3: dedupe state lives in signals table; only full RawItems persist.
+    from routr_signal.lib import db as _db
+    from routr_signal.lib import signal_store as _ss
+    from datetime import datetime, timezone as _tz
 
-    s1 = SeenStore(tmp_name)
+    # Use a non-Platform-literal source name so type-checkers don't complain;
+    # SQLite doesn't care.
+    tmp_source = "_validate"
+    conn = _db.get_db()
+    conn.execute("DELETE FROM signals WHERE source = ?", (tmp_source,))
+    conn.commit()
+
+    s1 = SeenStore(tmp_source)
     check("fresh SeenStore is empty", len(s1) == 0)
-    s1.add_many(["a", "b", "c"])
-    s1.save()
 
-    s2 = SeenStore(tmp_name)
+    def _mk(item_id: str) -> RawItem:
+        return RawItem(
+            id=item_id, source=tmp_source, title="t", body="b",
+            url="http://x", author=None,
+            created_at=datetime.now(_tz.utc), extra={},
+        )
+
+    s1.add_item(_mk("vid-a"))
+    s1.add_item(_mk("vid-b"))
+    s1.add_item(_mk("vid-c"))
+
+    s2 = SeenStore(tmp_source)
     check("SeenStore persists across instances", len(s2) == 3)
-    check("has() works for stored ids", s2.has("a") and s2.has("b") and s2.has("c"))
-    check("has() returns False for unstored", not s2.has("z"))
+    check("has() works for stored ids", s2.has("vid-a") and s2.has("vid-b") and s2.has("vid-c"))
+    check("has() returns False for unstored", not s2.has("vid-z"))
 
-    seen_path.unlink(missing_ok=True)
+    # cleanup
+    conn.execute("DELETE FROM signals WHERE source = ?", (tmp_source,))
+    conn.commit()
 
 
 def check_json_extractor() -> None:
@@ -535,12 +553,13 @@ def check_idempotence_live() -> None:
     section("[9] live idempotence: rerun produces 0 new HN items")
 
     from routr_signal.sources import hn
+    from routr_signal.lib import db as _db
 
-    seen_path = Path(__file__).resolve().parent.parent / "data" / "seen" / "hn.json"
-    backup: bytes | None = None
-    if seen_path.exists():
-        backup = seen_path.read_bytes()
-        seen_path.unlink()
+    # Clear any prior HN state in the signals table so the first fetch is fresh.
+    conn = _db.get_db()
+    backup_rows = conn.execute("SELECT * FROM signals WHERE source = 'hn'").fetchall()
+    conn.execute("DELETE FROM signals WHERE source = 'hn'")
+    conn.commit()
 
     try:
         first = hn.fetch()
@@ -551,11 +570,16 @@ def check_idempotence_live() -> None:
         check("first fetch is non-empty (sanity)", n1 >= 1)
         check("second fetch returns 0 new items (dedupe is idempotent)", n2 == 0)
     finally:
-        # Restore previous seen state.
-        if backup is not None:
-            seen_path.write_bytes(backup)
-        else:
-            seen_path.unlink(missing_ok=True)
+        # Restore prior state so subsequent runs are not surprised.
+        conn.execute("DELETE FROM signals WHERE source = 'hn'")
+        for row in backup_rows:
+            cols = list(row.keys())
+            placeholders = ",".join("?" for _ in cols)
+            conn.execute(
+                f"INSERT INTO signals ({','.join(cols)}) VALUES ({placeholders})",
+                tuple(row[c] for c in cols),
+            )
+        conn.commit()
 
 
 # -----------------------------------------------------------------------------

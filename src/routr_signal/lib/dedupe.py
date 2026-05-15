@@ -1,67 +1,65 @@
-"""Simple persistent set of seen item IDs per source.
+"""SQLite-backed dedupe with the old SeenStore shape.
 
-Each source writes to data/seen/<source>.json. The file is a JSON object:
+Pre-v3 we used a JSON file at data/seen/<source>.json. v3 moves dedupe into
+the SQLite `signals` table -- the existence of a row IS the dedupe state.
 
-    {
-      "seen": ["hn-1", "hn-2", ...],
-      "updated_at": "2026-05-13T07:00:00Z"
-    }
+API for sources (hn.py, reddit.py, github_issues.py, twitter.py,
+discord_paste.py):
 
-We keep at most `MAX_SEEN` ids per source to bound the file size. The oldest are dropped
-first (FIFO), but since we add in chronological order, the trailing tail is what we keep.
+    seen = SeenStore("hn")
+    if seen.has(item.id):     # primary key existence check (cached)
+        continue
+    seen.add_item(item)       # persist the full RawItem to signals + memo
+
+`add(id)` is kept for back-compat with tests / callers that only have an id;
+it tracks in memory but does NOT persist (a stub row is meaningless without
+title/url/etc). Real persistence requires the full RawItem via add_item().
 """
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-
-from .paths import seen_dir
-
-
-MAX_SEEN = 5000
+from . import signal_store
+from .types import RawItem
 
 
 class SeenStore:
+    """SQLite-backed dedupe with the old JSON-store API plus add_item()."""
+
     def __init__(self, source: str) -> None:
         self.source = source
-        self.path = seen_dir() / f"{source}.json"
-        self._set: set[str] = set()
-        self._load()
-
-    def _load(self) -> None:
-        if not self.path.exists():
-            self._set = set()
-            return
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            self._set = set(payload.get("seen", []))
-        except (json.JSONDecodeError, OSError):
-            # Corrupt file shouldn't break the pipeline. Reset.
-            self._set = set()
+        # Pre-load the seen-set into memory for O(1) has() during a source's
+        # fetch loop. Acceptable cost: a source touches at most a few thousand
+        # of its own ids per run.
+        self._mem: set[str] = signal_store.already_seen_in(source)
 
     def has(self, item_id: str) -> bool:
-        return item_id in self._set
+        if item_id in self._mem:
+            return True
+        if signal_store.is_seen(item_id):
+            self._mem.add(item_id)
+            return True
+        return False
 
     def add(self, item_id: str) -> None:
-        self._set.add(item_id)
+        """Track in memory only. For full persistence, use add_item()."""
+
+        self._mem.add(item_id)
 
     def add_many(self, ids: list[str]) -> None:
-        self._set.update(ids)
+        self._mem.update(ids)
+
+    def add_item(self, item: RawItem) -> bool:
+        """Persist the full RawItem to the signals table AND remember it.
+
+        Returns True if newly inserted, False if it was already there.
+        """
+
+        self._mem.add(item.id)
+        return signal_store.upsert_fetched(item, run_id=None)
 
     def save(self) -> None:
-        # Bound the set. We don't preserve insertion order (Python sets are insertion-ordered
-        # for small sets but not contract), so we just sort lexicographically and keep last N.
-        # Item ids are time-prefixed for HN/Reddit; lexicographic sort approximates chronological.
-        if len(self._set) > MAX_SEEN:
-            kept = sorted(self._set)[-MAX_SEEN:]
-            self._set = set(kept)
-
-        payload = {
-            "seen": sorted(self._set),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # No-op; SQLite commits are immediate inside signal_store.
+        return
 
     def __len__(self) -> int:
-        return len(self._set)
+        return len(self._mem)

@@ -132,7 +132,7 @@ def fetch() -> list[RawItem]:
                 continue
             if seen.has(item.id):
                 continue
-            seen.add(item.id)
+            seen.add_item(item)
             collected.append(item)
             added += 1
         debug(f"github_issues: {owner}/{name} → {added} new items")

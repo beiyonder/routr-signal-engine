@@ -12,6 +12,11 @@ must_match_any:
   - portkey
   - helicone
   - bifrost
+  - langfuse
+  - langwatch
+  - langsmith
+  - traceloop
+  - openllmetry
   - braintrust
   - openmeter
   - llm gateway
@@ -21,6 +26,24 @@ must_match_any:
   - llmops
   - mcp gateway
   - model context protocol
+
+  # Provider names that show up in pain posts
+  - anthropic
+  - openai api
+  - claude api
+  - gemini api
+  - bedrock
+  - vertex ai
+
+  # Eval / agent adjacencies
+  - ragas
+  - deepeval
+  - langchain
+  - langgraph
+  - llamaindex
+  - crewai
+  - autogen
+  - pydantic ai
 
   # Symptoms / pain phrases
   - rate limit
@@ -44,10 +67,12 @@ must_match_any:
   - token markup
   - retry storm
   - observability
+  - tracing
   - data residency
   - hipaa
   - self host
   - self-host
+  - self-hosted
   - air gap
   - air-gap
   - vpc deployment
@@ -55,6 +80,19 @@ must_match_any:
   - byok
   - semantic cache
   - prompt cache
+  - prompt caching
+  - tool calling
+  - tool call
+  - structured output
+  - structured outputs
+  - json mode
+  - function calling
+  - agent loop
+  - agent reliability
+  - hallucination
+  - retry
+  - exponential backoff
+  - circuit breaker
 
 # Routr-specific angles. Claude uses these to score `routr_relevance` and to draft post hooks.
 routr_angles:

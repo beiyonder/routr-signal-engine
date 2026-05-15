@@ -34,6 +34,9 @@ def data_dir() -> Path:
 
 
 def seen_dir() -> Path:
+    """Deprecated. v3 dedupe lives in the SQLite signals table; this helper
+    is kept only for tests / legacy callers that still touch the old path."""
+
     d = data_dir() / "seen"
     d.mkdir(parents=True, exist_ok=True)
     return d

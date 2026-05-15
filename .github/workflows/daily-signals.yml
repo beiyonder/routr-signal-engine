@@ -48,13 +48,16 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Restore pipeline state (dedupe + anchor embedding cache)
+      - name: Restore pipeline state (intel.db + anchor embedding cache)
         uses: actions/cache/restore@v4
         with:
           path: |
-            data/seen
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
             data/cache/anchors-*.json
-          # Use a rolling key so each run reads the most recent state and writes a new one.
+          # Rolling key: each run writes a fresh entry; restore-keys picks the
+          # most recent. SQLite WAL files travel with the main db.
           key: pipeline-state-${{ github.run_id }}
           restore-keys: |
             pipeline-state-
@@ -113,13 +116,15 @@ jobs:
 
       - name: Save pipeline state to Actions cache
         # Always save so dedupe survives even if the pipeline emitted no
-        # publishable items today. Keyed on run_id so each run writes a fresh
-        # cache entry; restore-keys: pipeline-state- picks the most recent.
+        # publishable items today. Keyed on run_id; restore-keys picks the most
+        # recent on the next run.
         if: always()
         uses: actions/cache/save@v4
         with:
           path: |
-            data/seen
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
             data/cache/anchors-*.json
           key: pipeline-state-${{ github.run_id }}
 

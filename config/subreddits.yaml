@@ -15,7 +15,7 @@ subreddits:
   - name: MachineLearning
     new_rss: https://old.reddit.com/r/MachineLearning/new.rss
     min_score: 5
-    max_items_per_run: 15
+    max_items_per_run: 20
 
   - name: LocalLLM
     new_rss: https://old.reddit.com/r/LocalLLM/new.rss
@@ -27,10 +27,40 @@ subreddits:
     min_score: 2
     max_items_per_run: 15
 
+  - name: LLMDevs
+    new_rss: https://old.reddit.com/r/LLMDevs/new.rss
+    min_score: 2
+    max_items_per_run: 20
+
+  - name: AI_Agents
+    new_rss: https://old.reddit.com/r/AI_Agents/new.rss
+    min_score: 2
+    max_items_per_run: 20
+
+  - name: LangChain
+    new_rss: https://old.reddit.com/r/LangChain/new.rss
+    min_score: 2
+    max_items_per_run: 15
+
+  - name: OpenAI
+    new_rss: https://old.reddit.com/r/OpenAI/new.rss
+    min_score: 10
+    max_items_per_run: 12
+
+  - name: ClaudeAI
+    new_rss: https://old.reddit.com/r/ClaudeAI/new.rss
+    min_score: 5
+    max_items_per_run: 12
+
   - name: devops
     new_rss: https://old.reddit.com/r/devops/new.rss
     min_score: 5
     max_items_per_run: 10
+
+  - name: MLOps
+    new_rss: https://old.reddit.com/r/mlops/new.rss
+    min_score: 3
+    max_items_per_run: 12
 
   - name: SideProject
     new_rss: https://old.reddit.com/r/SideProject/new.rss
@@ -49,6 +79,18 @@ searches:
   - query: llm gateway
     url: https://old.reddit.com/search.rss?q=llm+gateway&sort=new&t=week
     max_items_per_run: 15
+  - query: anthropic rate limit
+    url: https://old.reddit.com/search.rss?q=anthropic+rate+limit&sort=new&t=week
+    max_items_per_run: 12
+  - query: claude api production
+    url: https://old.reddit.com/search.rss?q=claude+api+production&sort=new&t=week
+    max_items_per_run: 12
+  - query: helicone vs langfuse
+    url: https://old.reddit.com/search.rss?q=helicone+langfuse&sort=new&t=month
+    max_items_per_run: 10
+  - query: portkey production
+    url: https://old.reddit.com/search.rss?q=portkey+production&sort=new&t=month
+    max_items_per_run: 10
 
 # Reddit asks scrapers to:
 #   1) Send a unique, descriptive User-Agent that includes a contact.

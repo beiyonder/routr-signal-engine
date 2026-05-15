@@ -59,6 +59,9 @@ data/digests/
 data/raw/
 data/seen/
 data/leads/
+data/intel.db
+data/intel.db-shm
+data/intel.db-wal
 
 # Internal strategy + handoff + brainstorm docs (keep code public, strategy private)
 _handoff/

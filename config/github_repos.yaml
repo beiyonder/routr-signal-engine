@@ -6,9 +6,10 @@
 # Leave empty to scan everything.
 
 repos:
+  # Direct competitor gateways
   - owner: BerriAI
     name: litellm
-    labels: []            # scan all — LiteLLM doesn't reliably label by symptom
+    labels: []
     max_items_per_run: 25
 
   - owner: Portkey-AI
@@ -19,15 +20,55 @@ repos:
   - owner: Helicone
     name: helicone
     labels: []
-    max_items_per_run: 10
+    max_items_per_run: 12
 
   - owner: maximhq
     name: bifrost
     labels: []
+    max_items_per_run: 12
+
+  # Observability / tracing adjacencies
+  - owner: langfuse
+    name: langfuse
+    labels: []
+    max_items_per_run: 12
+
+  - owner: traceloop
+    name: openllmetry
+    labels: []
     max_items_per_run: 10
 
-# Lookback window — issues created within the last N hours are candidates.
-lookback_hours: 30
+  - owner: langwatch
+    name: langwatch
+    labels: []
+    max_items_per_run: 10
 
-# Whether to include comments on existing issues (more signal, more tokens).
+  # Eval frameworks (their bug reports tell us what users actually do with LLMs)
+  - owner: explodinggradients
+    name: ragas
+    labels: []
+    max_items_per_run: 8
+
+  - owner: confident-ai
+    name: deepeval
+    labels: []
+    max_items_per_run: 8
+
+  # Agent frameworks
+  - owner: langchain-ai
+    name: langgraph
+    labels: []
+    max_items_per_run: 10
+
+  - owner: crewAIInc
+    name: crewAI
+    labels: []
+    max_items_per_run: 10
+
+  - owner: pydantic
+    name: pydantic-ai
+    labels: []
+    max_items_per_run: 8
+
+lookback_hours: 30
 include_comments: false
