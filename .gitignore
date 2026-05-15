@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -39,11 +39,17 @@ uv.lock
 # Local-only digest scratch (committed digests live under data/digests/)
 scratch/
 
-# Runtime cache files containing credentials (reddit token, device id, twitter cookies)
+# Runtime cache files containing credentials (reddit token, twitter cookies in
+# any shape: flat-dict json, playwright list json, base64 export, twikit sqlite).
+# Be aggressive: anything matching twitter-cookies* is off-limits.
 data/cache/reddit-oauth.json
 data/cache/reddit-device-id.txt
 data/cache/twitter-cookies.json
+data/cache/twitter-cookies-playwright.json
+data/cache/twitter-cookies-b64.txt
+data/cache/twitter-cookies*
 data/cache/twitter-session.db
+data/cache/playwright-profile/
 # Anchor embeddings are public and SHOULD be committed (data/cache/anchors-*.json).
 
 # Outbound queue contains real handles/profiles \u2014 keep local-only on a public repo
