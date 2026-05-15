@@ -1,19 +1,20 @@
 """X / Twitter source.
 
-Two-stage fetch:
-    1. Primary: twikit (Python wrapper around X's internal GraphQL API).
-       Auth via stored cookies first, full login flow as last resort.
-    2. Fallback: Playwright headless Chromium with stealth args, loads the
-       same cookies and DOM-scrapes profile + search pages.
+Strategy:
+    Primary: Playwright headless Chromium loaded with cookies from a real
+             browser session. Scrapes profile + search pages via the DOM.
+    Disabled (for now): twikit (Python wrapper around X's internal GraphQL).
 
-twikit is fast (low memory, no browser). Playwright is durable against X
-GraphQL changes but ~50x slower. We try twikit first; on auth failure, 0
-items, or any unhandled exception, we fall back to Playwright.
+    twikit v2.3.3 has an unfixed regression -- `ClientTransaction` setup
+    crashes before any auth happens (`KEY_BYTE indices` / `'key' attribute`
+    errors). Tracking upstream; will re-enable when patched. Opt back in
+    early with `ROUTR_SIGNAL_X_USE_TWIKIT=1`.
 
-Cookies are persisted at `data/cache/twitter-cookies.json`. On CI the cookies
-are bootstrapped from `TWITTER_COOKIES_B64` (a base64 of the same file). Use
-`tools/twitter_login.py` to populate the cookies file from a one-time real
-browser login on a dev machine. NEVER use a personal account.
+Cookies are persisted at `data/cache/twitter-cookies-playwright.json` (full
+attribute set). On CI the cookies are bootstrapped from the env var
+`TWITTER_COOKIES_B64` (base64 of the same file). Use
+`tools/twitter_login.py --import path/to/cookies.json` to populate from a
+Cookie-Editor export. NEVER use a personal account.
 
 ToS posture: scraping public tweets is against X's TOS. We use a dedicated
 burner. Stay polite (default 30s between reads), low volume (<100 items/day),
@@ -26,15 +27,14 @@ import asyncio
 import base64
 import contextlib
 import json
-import os
+import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from ..lib.config import twitter_watch
 from ..lib.dedupe import SeenStore
-from ..lib.env import env, env_required
+from ..lib.env import env, env_flag
 from ..lib.filters import prefilter
 from ..lib.logging import debug, error, info, warn
 from ..lib.paths import cache_dir
@@ -305,11 +305,48 @@ def _load_playwright_cookies() -> list[dict[str, Any]] | None:
     return None
 
 
+# NOTE: JS payload below uses zero regex. Regex literals inside Python
+# triple-quoted strings are an escaping nightmare (//`\d` needs `\\\\d` etc.)
+# and X's URL shape (`/handle/status/12345`) is easily parsed via split().
+_SCRAPE_JS = """
+() => {
+  const out = [];
+  document.querySelectorAll("article[data-testid='tweet']").forEach(a => {
+    try {
+      // Find the canonical tweet URL via the timestamp link.
+      const timeEl = a.querySelector("time");
+      const linkEl = timeEl ? timeEl.closest('a') : null;
+      const href = linkEl ? linkEl.getAttribute('href') : null;
+      if (!href) return;
+
+      // /<handle>/status/<id>(/...)  ->  handle = segs[statusIdx-1], id = segs[statusIdx+1]
+      const segs = href.split('/').filter(s => s.length > 0);
+      const statusIdx = segs.indexOf('status');
+      if (statusIdx < 0) return;
+      const handle = (statusIdx > 0) ? segs[statusIdx - 1] : null;
+      const idCandidate = segs[statusIdx + 1] || '';
+      const tid = idCandidate.split('?')[0].split('#')[0];
+      if (!tid) return;
+
+      // Body text.
+      const textEl = a.querySelector("div[data-testid='tweetText']");
+      const text = textEl ? textEl.innerText.trim() : '';
+
+      const dt = timeEl ? timeEl.getAttribute('datetime') : null;
+
+      if (tid && text) out.push({ id: tid, text: text, handle: handle, datetime: dt });
+    } catch (e) {}
+  });
+  return out;
+}
+"""
+
+
 async def _scrape_url(page: Any, url: str, *, max_items: int) -> list[dict[str, Any]]:
     """Navigate to url and scroll until we have max_items tweets in the DOM."""
 
     await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-    await page.wait_for_timeout(3_000)  # let React hydrate
+    await page.wait_for_timeout(3_500)  # let React hydrate
 
     seen_ids: set[str] = set()
     scraped: list[dict[str, Any]] = []
@@ -317,42 +354,23 @@ async def _scrape_url(page: Any, url: str, *, max_items: int) -> list[dict[str, 
     for _ in range(20):
         if len(scraped) >= max_items:
             break
-        tweets = await page.evaluate(
-            """
-            () => {
-              const out = [];
-              document.querySelectorAll("article[data-testid='tweet']").forEach(a => {
-                try {
-                  const link = a.querySelector("a[href*='/status/']");
-                  const href = link ? link.getAttribute("href") : null;
-                  const m = href ? href.match(/\\\\/status\\\\/(\\\\d+)/) : null;
-                  const tid = m ? m[1] : null;
-
-                  const textEl = a.querySelector("div[data-testid='tweetText']");
-                  const text = textEl ? textEl.innerText : "";
-
-                  const userLink = a.querySelector("a[role='link'] div[dir='ltr'] span");
-                  const screen = a.querySelector("a[href^='/'] span");
-                  const handleEl = a.querySelector("div[data-testid='User-Name'] a[href^='/']");
-                  const handle = handleEl ? handleEl.getAttribute("href").replace(/^\\\\//, "") : null;
-
-                  const dt = a.querySelector("time")?.getAttribute("datetime") || null;
-
-                  if (tid && text) out.push({ id: tid, text, handle, datetime: dt });
-                } catch (e) {}
-              });
-              return out;
-            }
-            """
-        )
+        try:
+            tweets = await page.evaluate(_SCRAPE_JS)
+        except Exception as e:  # noqa: BLE001
+            debug(f"twitter[pw]: page.evaluate raised: {e}")
+            break
+        new_this_round = 0
         for t in tweets:
             tid = t.get("id")
             if not tid or tid in seen_ids:
                 continue
             seen_ids.add(tid)
             scraped.append(t)
-        if len(scraped) == len(seen_ids) and len(tweets) > 0:
+            new_this_round += 1
+        if new_this_round == 0:
             stagnant_iters += 1
+        else:
+            stagnant_iters = 0
         if stagnant_iters >= 3:
             break
         await page.evaluate("window.scrollBy(0, window.innerHeight * 2);")
@@ -476,35 +494,45 @@ def _row_to_item(row: dict[str, Any], *, attributed_to: str) -> RawItem | None:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_windows_proactor_loop() -> None:
+    """twikit's import side-effect can flip the policy to selector, which then
+    breaks Playwright's subprocess spawn on Windows. Force proactor up front so
+    both paths work in either order."""
+
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+
 def fetch() -> list[RawItem]:
-    """Try twikit; on failure or empty result, try Playwright; dedupe and prefilter."""
+    """Fetch X items via Playwright (primary). Optionally try twikit if enabled."""
 
     cfg = twitter_watch()
     if not cfg or (not cfg.get("searches") and not cfg.get("users")):
         info("twitter: config/twitter_watch.yaml is empty; source disabled")
         return []
 
+    _ensure_windows_proactor_loop()
     _hydrate_cookies_from_env()
 
     seen = SeenStore(SOURCE)
+    items: list[RawItem] = []
 
-    # Primary path
-    primary_items: list[RawItem] = []
-    try:
-        primary_items = asyncio.run(_fetch_via_twikit())
-    except Exception as e:  # noqa: BLE001
-        warn(f"twitter: twikit primary path crashed: {e}")
+    # twikit is opt-in until upstream fixes the ClientTransaction regression.
+    if env_flag("ROUTR_SIGNAL_X_USE_TWIKIT", default=False):
+        try:
+            items = asyncio.run(_fetch_via_twikit())
+            info(f"twitter: twikit returned {len(items)} items")
+        except Exception as e:  # noqa: BLE001
+            warn(f"twitter: twikit path crashed: {e}")
+            items = []
 
-    items: list[RawItem]
-    if primary_items:
-        info(f"twitter: twikit returned {len(primary_items)} items")
-        items = primary_items
-    else:
-        info("twitter: twikit returned 0 items; trying Playwright fallback")
+    if not items:
         try:
             items = asyncio.run(_fetch_via_playwright())
+            info(f"twitter: Playwright returned {len(items)} items")
         except Exception as e:  # noqa: BLE001
-            error(f"twitter: Playwright fallback crashed: {e}")
+            error(f"twitter: Playwright crashed: {e}")
             items = []
 
     # Dedupe
