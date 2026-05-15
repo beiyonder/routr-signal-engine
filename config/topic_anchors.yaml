@@ -1,0 +1,113 @@
+# Topic anchors for semantic relevance scoring.
+#
+# Each anchor is a short, well-formed natural-language description of an LLMOps /
+# infra topic we care about. At ingest, we embed every fresh item and compute the
+# maximum cosine similarity against any anchor in this list. That score becomes the
+# `cosine_score` field and is used to (a) cut obviously-off-topic items BEFORE the
+# LLM call, and (b) accompany the LLM score in the digest as a deterministic second
+# signal.
+#
+# Editing this file:
+#  - keep anchors specific. "ai is cool" is useless. "p99 latency in multi-provider
+#    llm routing" is gold.
+#  - aim for 12-20 anchors that together cover the space. More is fine but it adds
+#    embedding cost (negligible) and dilutes the cosine signal.
+#  - the `topic` slug must match one of the topics in pain_signal_classifier.md
+#    (cold_start, latency, failover, multi_provider, observability, cost_attribution,
+#    self_host, security, caching, routing, mcp, agent_reliability, benchmarks,
+#    model_release, community, other). Used for downstream tagging.
+#  - the `weight` is multiplied into the cosine score when ranking; defaults to 1.0.
+#    Bump for topics we particularly want to surface; reduce for noisy categories.
+
+anchors:
+  - topic: cold_start
+    text: >
+      severe cold start latency on serverless lambda or cloudflare workers when
+      using a python llm proxy library that imports many provider sdks at startup
+    weight: 1.1
+
+  - topic: latency
+    text: >
+      p99 tail latency in multi provider llm routing, throughput bottlenecks in
+      llm gateway or proxy infrastructure under high request volume
+    weight: 1.1
+
+  - topic: failover
+    text: >
+      retry storms, provider fallback logic, hand rolled failover state machines
+      that lose conversation state when switching between openai anthropic gemini
+    weight: 1.2
+
+  - topic: multi_provider
+    text: >
+      running multiple llm providers concurrently in production, the operational
+      pain of juggling api keys models and per provider quirks across openai
+      anthropic gemini together
+    weight: 1.1
+
+  - topic: observability
+    text: >
+      llm observability and tracing, logging request response bodies, prompt and
+      completion auditing, cost per call attribution, langfuse helicone braintrust
+    weight: 1.0
+
+  - topic: cost_attribution
+    text: >
+      hidden token markups on llm gateways, opaque billing on openrouter or similar
+      proxies, accurately attributing inference cost per request and per customer
+    weight: 1.2
+
+  - topic: self_host
+    text: >
+      self hosted llm gateway deployment in customer vpc or on premises, air gapped
+      inference for regulated industries, avoiding cloud only saas proxies
+    weight: 1.0
+
+  - topic: security
+    text: >
+      llm api key management and rotation, prompt injection defense, data residency
+      and pii handling in llm pipelines, secure routing for healthcare or fintech
+    weight: 0.9
+
+  - topic: caching
+    text: >
+      semantic caching for llm responses across providers, prompt cache hit rate
+      degradation, kv cache reuse between requests, embedding based exact match cache
+    weight: 1.0
+
+  - topic: routing
+    text: >
+      model selection logic, routing requests to the right model based on cost
+      latency or capability, learned versus rule based routing for llm requests
+    weight: 1.0
+
+  - topic: mcp
+    text: >
+      model context protocol implementations, mcp gateway and tool routing,
+      filtering tool schemas per agent state, kv cache invalidation when tool list
+      changes
+    weight: 1.0
+
+  - topic: agent_reliability
+    text: >
+      agentic loop reliability, deterministic tool chaining versus open loop agents,
+      tool calling correctness across claude gemini llama models, agent failure modes
+    weight: 1.0
+
+  - topic: benchmarks
+    text: >
+      measured benchmarks of llm gateway performance, latency comparison of litellm
+      portkey helicone openrouter, real world tokens per second numbers, p50 p99
+    weight: 1.0
+
+  - topic: model_release
+    text: >
+      new llm model launch from anthropic openai google meta, frontier model
+      release announcement, pricing change or capability change in a major provider
+    weight: 0.8
+
+  - topic: community
+    text: >
+      llm infrastructure community discussion, latent space ai engineer discord
+      threads, llmops practitioners debating architecture choices
+    weight: 0.9

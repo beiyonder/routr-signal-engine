@@ -1,0 +1,37 @@
+# Hacker News queries hit via Algolia.
+# Two query types:
+#   1) `tag_query` — filter by HN tag (story, comment, show_hn, ask_hn, front_page).
+#      Cheaper, broader.
+#   2) `keyword_query` — full-text search across all items.
+#      Used to surface comments deep inside large threads.
+#
+# Each query is bounded by `created_at_i > now - lookback_seconds`.
+
+lookback_hours: 30
+
+tag_queries:
+  - tag: show_hn
+    keywords: ["gateway", "proxy", "llm", "ai", "mcp", "routing", "inference"]
+    max_items: 30
+  - tag: ask_hn
+    keywords: ["llm", "gateway", "openrouter", "litellm", "ai infrastructure", "provider"]
+    max_items: 20
+  - tag: front_page
+    keywords: ["openrouter", "litellm", "portkey", "helicone", "llm gateway", "anthropic", "openai api", "mcp"]
+    max_items: 20
+
+keyword_queries:
+  - query: openrouter
+    max_items: 20
+  - query: litellm
+    max_items: 20
+  - query: portkey
+    max_items: 10
+  - query: helicone
+    max_items: 10
+  - query: llm gateway
+    max_items: 20
+  - query: mcp gateway
+    max_items: 10
+  - query: ai gateway
+    max_items: 15

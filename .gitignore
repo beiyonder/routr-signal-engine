@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+
+# uv
+.uv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+*.secret
+
+# Runtime
+*.log
+.cache/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Local-only digest scratch (committed digests live under data/digests/)
+scratch/
+
+# Runtime cache files containing credentials (reddit token, device id, twitter cookies)
+data/cache/reddit-oauth.json
+data/cache/reddit-device-id.txt
+data/cache/twitter-cookies.json
+data/cache/twitter-session.db
+# Anchor embeddings are public and SHOULD be committed (data/cache/anchors-*.json).
+
+# Outbound queue contains real handles/profiles \u2014 keep local-only on a public repo
+data/leads/queue.jsonl
+
+# Internal strategy + handoff + brainstorm docs (keep code public, strategy private)
+_handoff/
+conversation/
+PLAN_v2.md
+prompt.md
+scratch/
+
+# Manual Discord paste-ins may include third-party content \u2014 author chooses what to push
+data/manual/

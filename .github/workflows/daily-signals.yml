@@ -1,0 +1,105 @@
+name: daily-signals
+
+on:
+  schedule:
+    # 07:00 UTC daily — 12:30 IST, 02:00 EST, 08:00 CET.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip Slack/Discord/email POSTs and skip git commit"
+        type: boolean
+        default: false
+      sources:
+        description: "Comma-separated source override (e.g., 'hn,reddit'). Empty = all enabled."
+        type: string
+        default: ""
+
+permissions:
+  contents: write   # for committing data/ back to the repo
+
+concurrency:
+  group: daily-signals
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Resolve runtime flags
+        id: flags
+        env:
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          INPUT_SOURCES: ${{ github.event.inputs.sources }}
+        run: |
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            echo "publish=0" >> $GITHUB_OUTPUT
+            echo "commit=0"  >> $GITHUB_OUTPUT
+          else
+            echo "publish=1" >> $GITHUB_OUTPUT
+            echo "commit=1"  >> $GITHUB_OUTPUT
+          fi
+          if [ -n "${INPUT_SOURCES}" ]; then
+            echo "sources=${INPUT_SOURCES}" >> $GITHUB_OUTPUT
+          else
+            echo "sources=hn,reddit,github_issues" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run pipeline
+        env:
+          # LLM provider/model split between classifier (cheap) and drafter (flagship)
+          ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
+          ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
+          ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          # All three LLM keys (only the selected providers' are used)
+          ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+          # Outputs (Discord primary; Slack + email optional)
+          DISCORD_WEBHOOK_URL:    ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL:      ${{ secrets.SLACK_WEBHOOK_URL }}
+          EMAIL_SMTP_HOST:        ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT:        ${{ secrets.EMAIL_SMTP_PORT }}
+          EMAIL_SMTP_USER:        ${{ secrets.EMAIL_SMTP_USER }}
+          EMAIL_SMTP_PASS:        ${{ secrets.EMAIL_SMTP_PASS }}
+          EMAIL_FROM:             ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:               ${{ secrets.EMAIL_TO }}
+          # GitHub API
+          GITHUB_TOKEN:           ${{ secrets.GITHUB_TOKEN }}
+          # Run-time flags
+          ROUTR_SIGNAL_SOURCES:   ${{ steps.flags.outputs.sources }}
+          ROUTR_SIGNAL_PUBLISH:   ${{ steps.flags.outputs.publish }}
+          ROUTR_SIGNAL_COMMIT:    ${{ steps.flags.outputs.commit }}
+        run: routr-signal
+
+      - name: Commit dedupe state + digest
+        if: steps.flags.outputs.commit == '1'
+        run: |
+          git config user.name  "routr-signal-engine[bot]"
+          git config user.email "actions@github.com"
+          if [ -n "$(git status --porcelain data/)" ]; then
+            git add data/
+            git commit -m "digest: $(date -u +%Y-%m-%d)"
+            git push
+          else
+            echo "No data/ changes to commit."
+          fi

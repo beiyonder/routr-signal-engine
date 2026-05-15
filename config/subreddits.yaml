@@ -1,0 +1,71 @@
+# Monitored subreddits. Each subreddit pulls from /new.rss (most recent posts) and,
+# optionally, /comments.rss for fresh comments.
+#
+# `min_score`: minimum upvotes to flag for Claude (raw RSS has no score; we hit the
+# Reddit JSON endpoint for each candidate to confirm score before classifying).
+# `max_items_per_run`: hard cap to keep Claude tokens predictable.
+
+subreddits:
+  - name: LocalLLaMA
+    new_rss: https://old.reddit.com/r/LocalLLaMA/new.rss
+    comments_rss: https://old.reddit.com/r/LocalLLaMA/comments.rss
+    min_score: 3
+    max_items_per_run: 25
+
+  - name: MachineLearning
+    new_rss: https://old.reddit.com/r/MachineLearning/new.rss
+    min_score: 5
+    max_items_per_run: 15
+
+  - name: LocalLLM
+    new_rss: https://old.reddit.com/r/LocalLLM/new.rss
+    min_score: 3
+    max_items_per_run: 15
+
+  - name: AIEngineer
+    new_rss: https://old.reddit.com/r/AIEngineer/new.rss
+    min_score: 2
+    max_items_per_run: 15
+
+  - name: devops
+    new_rss: https://old.reddit.com/r/devops/new.rss
+    min_score: 5
+    max_items_per_run: 10
+
+  - name: SideProject
+    new_rss: https://old.reddit.com/r/SideProject/new.rss
+    min_score: 3
+    max_items_per_run: 10
+
+# Reddit search queries (combine multiple subs into one search). Useful for
+# keyword-driven discovery beyond /new.
+searches:
+  - query: openrouter alternative
+    url: https://old.reddit.com/search.rss?q=openrouter+alternative&sort=new&t=week
+    max_items_per_run: 15
+  - query: litellm latency
+    url: https://old.reddit.com/search.rss?q=litellm+latency&sort=new&t=week
+    max_items_per_run: 15
+  - query: llm gateway
+    url: https://old.reddit.com/search.rss?q=llm+gateway&sort=new&t=week
+    max_items_per_run: 15
+
+# Reddit asks scrapers to:
+#   1) Send a unique, descriptive User-Agent that includes a contact.
+#   2) Throttle aggressively (we use one request every 3s).
+#   3) Authenticate when possible (we don't — public RSS only).
+#
+# Reddit's recommended UA format:
+#   <platform>:<app-id>:<version> (by /u/<username>)
+# Edit the trailing username when you've registered a Reddit account.
+fetch:
+  user_agent: "linux:routr-signal-engine:v0.1 (by /u/routr-signals)"
+  min_seconds_between_requests: 3.0
+  max_retries: 2
+  backoff_seconds: 30
+  # If old.reddit.com 403s, we try these alternates in order before giving up.
+  # The pipeline degrades gracefully — Reddit going dark won't kill the digest.
+  host_fallback:
+    - old.reddit.com
+    - www.reddit.com
+    - reddit.com

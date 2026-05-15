@@ -1,0 +1,33 @@
+# GitHub repositories whose Issues tab we scan daily for fresh competitor pain.
+# Each new open issue is checked against `keywords.yaml`'s `must_match_any`
+# and then classified by Claude.
+#
+# Optional `labels` array narrows to issues with at least one matching label.
+# Leave empty to scan everything.
+
+repos:
+  - owner: BerriAI
+    name: litellm
+    labels: []            # scan all — LiteLLM doesn't reliably label by symptom
+    max_items_per_run: 25
+
+  - owner: Portkey-AI
+    name: gateway
+    labels: []
+    max_items_per_run: 15
+
+  - owner: Helicone
+    name: helicone
+    labels: []
+    max_items_per_run: 10
+
+  - owner: maximhq
+    name: bifrost
+    labels: []
+    max_items_per_run: 10
+
+# Lookback window — issues created within the last N hours are candidates.
+lookback_hours: 30
+
+# Whether to include comments on existing issues (more signal, more tokens).
+include_comments: false

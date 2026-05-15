@@ -1,0 +1,76 @@
+# Pain-signal keyword filter.
+# Two purposes:
+#   1) Cheap pre-filter on raw items before paying Claude tokens.
+#   2) Hint phrases passed to Claude so it knows what to score highly.
+
+# Items must match at least one phrase in `must_match_any` to be sent to Claude.
+# Case-insensitive substring match. Keep this list permissive — Claude does the real filtering.
+must_match_any:
+  # Direct product names (competitors + the category)
+  - openrouter
+  - litellm
+  - portkey
+  - helicone
+  - bifrost
+  - braintrust
+  - openmeter
+  - llm gateway
+  - ai gateway
+  - llm proxy
+  - inference gateway
+  - llmops
+  - mcp gateway
+  - model context protocol
+
+  # Symptoms / pain phrases
+  - rate limit
+  - rate-limit
+  - cold start
+  - cold-start
+  - cold boot
+  - latency
+  - p99
+  - p95
+  - timeout
+  - multi-provider
+  - multi provider
+  - provider fallback
+  - failover
+  - llm cost
+  - token cost
+  - api cost
+  - inference cost
+  - api markup
+  - token markup
+  - retry storm
+  - observability
+  - data residency
+  - hipaa
+  - self host
+  - self-host
+  - air gap
+  - air-gap
+  - vpc deployment
+  - bring your own key
+  - byok
+  - semantic cache
+  - prompt cache
+
+# Routr-specific angles. Claude uses these to score `routr_relevance` and to draft post hooks.
+routr_angles:
+  - typescript edge gateway eliminates Python cold-starts
+  - direct provider routing avoids 5% openrouter token markup
+  - self-hosted vpc deployment for hipaa/fintech compliance
+  - mcp gateway category is being formed; first-mover narrative
+  - PHI/PII redaction middleware before request hits provider
+  - deterministic guardrails as response to AI trust deficit
+  - semantic caching across providers
+  - 100% cost attribution per request
+
+# Subjects to suppress (avoid noise even if keywords match).
+suppress_if_contains:
+  - "i'm hiring"
+  - "we're hiring"
+  - "for sale"
+  - "blogspam"
+  - giveaway
