@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Pre-commit guard: blocks commits that try to land a credential.
+
+Runs before every `git commit`. Inspects the staged file list and the
+staged content for:
+
+    * Filenames that match known credential-cache patterns
+      (data/cache/twitter-cookies*, .env, *.secret, etc.) - even if they
+      slipped past .gitignore.
+    * Content that matches credential-shaped regex
+      (Anthropic / Gemini / OpenAI API keys, Discord webhook URLs,
+      Twitter auth_token / ct0 cookie shape, AWS keys, etc.).
+
+If anything matches, prints a clear message naming the file and the
+matched pattern, and exits non-zero so git aborts the commit.
+
+To bypass intentionally (rare): `git commit --no-verify`.
+
+Install:
+    PowerShell: Copy-Item tools/git-hooks/pre-commit .git/hooks/pre-commit
+    bash:       cp tools/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Filename rules (path patterns that must NEVER be committed)
+# ---------------------------------------------------------------------------
+
+FILENAME_BLOCKLIST = [
+    re.compile(p)
+    for p in [
+        r"(^|/)\.env$",
+        r"(^|/)\.env\.local$",
+        r"(^|/)\.env\..*\.local$",
+        r"(^|/).*\.secret$",
+        r"(^|/).*\.pem$",
+        r"(^|/).*\.key$",
+        r"(^|/)data/cache/twitter-cookies.*",
+        r"(^|/)data/cache/reddit-oauth\.json$",
+        r"(^|/)data/cache/twitter-session\.db$",
+        r"(^|/)data/leads/queue\.jsonl$",
+        r"(^|/)data/manual/",
+    ]
+]
+
+# ---------------------------------------------------------------------------
+# Content rules (regex patterns scanned line-by-line in staged blob)
+# ---------------------------------------------------------------------------
+
+CONTENT_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("Anthropic API key",  re.compile(r"sk-ant-api03-[A-Za-z0-9_\-]{40,}")),
+    ("Gemini API key",     re.compile(r"AIzaSy[A-Za-z0-9_\-]{30,}")),
+    ("OpenAI project key", re.compile(r"sk-proj-[A-Za-z0-9_\-]{40,}")),
+    ("OpenAI legacy key",  re.compile(r"\bsk-[A-Za-z0-9]{20,}\b(?!-api)")),
+    ("Firecrawl key",      re.compile(r"\bfc-[a-f0-9]{20,}\b")),
+    ("Discord webhook",    re.compile(r"https?://discord(?:app)?\.com/api/webhooks/\d{15,}/[A-Za-z0-9_\-]{30,}")),
+    ("Slack webhook",      re.compile(r"https?://hooks\.slack\.com/services/[A-Z0-9/]{20,}")),
+    ("AWS access key",     re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("X auth_token cookie",re.compile(r'"name"\s*:\s*"auth_token"\s*,\s*"value"\s*:\s*"[a-f0-9]{40,}"')),
+    ("X ct0 cookie",       re.compile(r'"name"\s*:\s*"ct0"\s*,\s*"value"\s*:\s*"[a-f0-9]{40,}"')),
+    ("Generic high-entropy bearer", re.compile(r"\bBearer [A-Za-z0-9_\-]{40,}\b")),
+]
+
+# Text file size cap. Anything larger we still scan but only the first N bytes.
+MAX_SCAN_BYTES = 1_000_000
+
+
+# ---------------------------------------------------------------------------
+
+def staged_files() -> list[str]:
+    proc = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def staged_blob(path: str) -> bytes | None:
+    # Read the version that will actually be committed (the staged blob),
+    # not whatever is on the working tree.
+    proc = subprocess.run(
+        ["git", "show", f":{path}"],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout[:MAX_SCAN_BYTES]
+
+
+def is_binary(blob: bytes) -> bool:
+    return b"\x00" in blob[:8192]
+
+
+def main() -> int:
+    files = staged_files()
+    if not files:
+        return 0
+
+    violations: list[tuple[str, str]] = []
+
+    for path in files:
+        # 1. Path-based block
+        for pat in FILENAME_BLOCKLIST:
+            if pat.search(path):
+                violations.append((path, f"path matches blocklist /{pat.pattern}/"))
+                break
+
+        # 2. Content-based scan
+        blob = staged_blob(path)
+        if blob is None or is_binary(blob):
+            continue
+        try:
+            text = blob.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        for label, rule in CONTENT_RULES:
+            m = rule.search(text)
+            if m:
+                redacted = m.group(0)[:8] + "..." + m.group(0)[-4:] if len(m.group(0)) > 16 else m.group(0)
+                violations.append((path, f"{label} pattern: {redacted}"))
+                break
+
+    if violations:
+        print("=" * 72, file=sys.stderr)
+        print("pre-commit BLOCKED this commit. Credential-shaped content detected:", file=sys.stderr)
+        print("=" * 72, file=sys.stderr)
+        for path, reason in violations:
+            print(f"  {path}", file=sys.stderr)
+            print(f"      -> {reason}", file=sys.stderr)
+        print("=" * 72, file=sys.stderr)
+        print("Fix: remove the file or scrub the secret, then commit again.", file=sys.stderr)
+        print("Bypass (rare, dangerous): git commit --no-verify", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

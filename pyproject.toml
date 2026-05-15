@@ -1,11 +1,11 @@
 [project]
 name = "routr-signal-engine"
 version = "0.1.0"
-description = "Daily LLM-infra pain-signal detection and digest pipeline for Routr GTM."
+description = "Personal daily signal aggregator with cosine + LLM relevance filter."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "Routr team" }]
+authors = [{ name = "private" }]
 
 dependencies = [
     "anthropic>=0.40.0",

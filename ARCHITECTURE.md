@@ -1,16 +1,17 @@
-# routr-signal-engine — Architecture
+# signal-engine — Architecture
 
-> Companion to `prompt.md`. `prompt.md` is the *what*; this file is the *how*.
+> The *how*. The *what* (rationale, anchor topics, voice rules) lives in
+> private notes outside this repo.
 
 ## Goal
 
 Every morning at **07:00 UTC** a GitHub Actions workflow:
 
 1. Pulls fresh items from a handful of high-signal sources.
-2. Sends candidate items to Claude Haiku 4.5 for classification + lead extraction.
-3. Drafts 5 post hooks (X thread, LinkedIn, Reddit, HN comment, Dev.to title).
-4. Emits one digest to **Slack**, **Discord**, **email**, and **the repo** (`data/digests/YYYY-MM-DD.md`).
-5. Appends qualified leads to `data/leads/queue.jsonl` (manual Clay enrichment weekly).
+2. Sends candidate items to a small classifier LLM for relevance scoring + lead extraction.
+3. Drafts a few post hooks (X thread, LinkedIn, Reddit, HN comment, Dev.to title).
+4. Emits one digest to **Discord** primarily (Slack and email are optional).
+5. Appends qualified leads to `data/leads/queue.jsonl` (gitignored; manual enrichment offline).
 
 Everything runs on the GitHub Actions free tier (public repo = unlimited minutes).
 LLM cost target: **<$10/month**.

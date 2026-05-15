@@ -1,10 +1,10 @@
-# routr-signal-engine
+# signal-engine
 
-Daily LLM-infra pain-signal pipeline. Fetches discussions from Hacker News, Reddit, GitHub competitor issues, X/Twitter, and manually-pasted Discord threads. A small classifier LLM (Claude Haiku 4.5 / Gemini 3 Flash) scores each item for genuine infrastructure pain, a flagship drafter (Gemini 3 Pro / Claude Opus) writes five voice-locked post hooks, and the digest lands in Discord every morning at **07:00 UTC**.
+A personal daily signal aggregator. Fetches discussions from Hacker News, Reddit, public GitHub issues, X/Twitter, and manually-pasted Discord threads. A small classifier LLM scores each item for relevance, a larger drafter LLM writes a few post hooks, and the digest lands in a Discord channel every morning at **07:00 UTC**.
 
-Two-layer relevance: a deterministic cosine-similarity prefilter against curated topic anchors drops ~50% of items before any LLM call, then the classifier handles the rest. Person-level intelligence: every signal is attributed to its author and aggregated across sources over time.
+Two-layer relevance: a deterministic cosine-similarity prefilter against curated topic anchors drops ~50% of items before any LLM call, then the classifier handles the rest. Items are attributed to authors and aggregated across sources over time.
 
-Cost target: **<$10/month** (LLM API only; everything else is free tier). Actual measured cost: ~$1.35 / month at one run per day.
+Cost target: **<$10/month** (LLM API only; everything else is free tier).
 
 ## Quick start
 
