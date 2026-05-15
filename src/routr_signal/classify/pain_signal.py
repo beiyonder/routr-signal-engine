@@ -44,7 +44,11 @@ from ..lib.types import ClassifiedItem, Platform, RawItem, Wedge
 
 
 SYSTEM_PROMPT_NAME = "pain_signal_classifier"
-MAX_ITEMS_PER_CALL = 30
+# Each classified entry is ~150-220 tokens of structured JSON. At 30 items per
+# call we routinely exceeded the 4096 output-token budget on Haiku 4.5, which
+# truncated the response mid-string and failed JSON parse. 15 keeps each call
+# comfortably under 4k output tokens and gives the parser room to breathe.
+MAX_ITEMS_PER_CALL = 15
 
 
 # Map new topic taxonomy → legacy Wedge enum (for ClassifiedItem.wedge).
@@ -86,7 +90,12 @@ def classify(items: list[RawItem]) -> list[ClassifiedItem]:
         from .client import call_json
 
         try:
-            response = call_json(system=system, user=user, role="classifier")
+            response = call_json(
+                system=system,
+                user=user,
+                role="classifier",
+                max_tokens=8192,
+            )
         except Exception as e:  # noqa: BLE001
             warn(f"pain_signal.classify: classifier call failed for chunk of {len(chunk)}: {e}")
             classified.extend(_unclassified_fallback(chunk))

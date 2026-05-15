@@ -17,6 +17,7 @@ with exponential backoff. Unrecoverable failures raise — callers catch upstrea
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import time
@@ -283,18 +284,33 @@ _IMPLS: dict[str, Callable[..., str]] = {
 def _extract_json(text: str) -> dict[str, Any]:
     """Find the first balanced JSON object in `text` and parse it.
 
-    Robust to ```json fences, prose preambles, and stray suffixes.
+    Robust to ```json fences (balanced OR truncated), prose preambles, and
+    trailing chatter. Last resort: balanced-brace walker with quote-state
+    tracking so a `}` inside a string doesn't fool us.
     """
 
     text = text.strip()
+
+    # Strip leading code fence, balanced or not.
+    if text.startswith("```"):
+        # Drop opening "```" plus optional "json" tag plus whitespace.
+        text = re.sub(r"^```\s*(?:json)?\s*", "", text, count=1, flags=re.IGNORECASE)
+    # Strip trailing fence if present.
+    if text.rstrip().endswith("```"):
+        text = text.rstrip()
+        text = text[:-3].rstrip()
+    text = text.strip()
+
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
+    # Try a balanced fence match next (handles preamble + ```json ... ``` form).
     fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fence_match:
-        return json.loads(fence_match.group(1).strip())
+        with contextlib.suppress(json.JSONDecodeError):
+            return json.loads(fence_match.group(1).strip())
 
     start = text.find("{")
     if start == -1:
