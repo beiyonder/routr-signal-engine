@@ -1,0 +1,280 @@
+name: pipeline
+
+# One workflow file, three jobs, three cron triggers.
+#
+# Why one file: GitHub Actions cache is scoped to the workflow file. The
+# dispatch worker MUST read the intel.db state produced by the daily and
+# synthesis jobs, so they all live here to share the `pipeline-state-*`
+# cache namespace.
+#
+# Concurrency group `pipeline` serializes all three jobs against each other
+# so cache writes never overlap.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"          # daily-signals at 07:00 UTC
+    - cron: "0 14 * * 0"         # weekly-synthesis Sundays at 14:00 UTC
+    - cron: "15,30,45 * * * *"   # dispatch-approved 3x/hour (off :00 to skip the 07:00 daily window)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Which task to run"
+        type: choice
+        required: true
+        default: "dispatch"
+        options:
+          - daily
+          - synthesis
+          - dispatch
+      dry_run:
+        description: "Skip publish (daily only)"
+        type: boolean
+        default: false
+      sources:
+        description: "Source override (daily only; comma-separated)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+env:
+  PIPELINE_CACHE_KEY: pipeline-state-${{ github.run_id }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # DAILY: fetch -> classify -> publish to Discord
+  # ---------------------------------------------------------------------------
+  daily:
+    if: |
+      github.event.schedule == '0 7 * * *' ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'daily')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install Playwright Chromium (X fallback)
+        run: python -m playwright install --with-deps chromium
+
+      - name: Restore pipeline state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Resolve runtime flags
+        id: flags
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_SOURCES: ${{ inputs.sources }}
+        run: |
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            echo "publish=0" >> $GITHUB_OUTPUT
+          else
+            echo "publish=1" >> $GITHUB_OUTPUT
+          fi
+          if [ -n "${INPUT_SOURCES}" ]; then
+            echo "sources=${INPUT_SOURCES}" >> $GITHUB_OUTPUT
+          else
+            echo "sources=hn,reddit,github_issues,twitter,discord_paste,hf_papers,newsletters" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run pipeline
+        env:
+          ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
+          ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
+          ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+          DISCORD_WEBHOOK_URL:    ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL:      ${{ secrets.SLACK_WEBHOOK_URL }}
+          EMAIL_SMTP_HOST:        ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT:        ${{ secrets.EMAIL_SMTP_PORT }}
+          EMAIL_SMTP_USER:        ${{ secrets.EMAIL_SMTP_USER }}
+          EMAIL_SMTP_PASS:        ${{ secrets.EMAIL_SMTP_PASS }}
+          EMAIL_FROM:             ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:               ${{ secrets.EMAIL_TO }}
+          GITHUB_TOKEN:           ${{ secrets.GITHUB_TOKEN }}
+          TWITTER_USERNAME:       ${{ secrets.TWITTER_USERNAME }}
+          TWITTER_EMAIL:          ${{ secrets.TWITTER_EMAIL }}
+          TWITTER_PASSWORD:       ${{ secrets.TWITTER_PASSWORD }}
+          TWITTER_TOTP_SECRET:    ${{ secrets.TWITTER_TOTP_SECRET }}
+          TWITTER_COOKIES_B64:    ${{ secrets.TWITTER_COOKIES_B64 }}
+          ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_SIGNAL_TWITTER_DELAY_S || '30' }}
+          ROUTR_SIGNAL_SOURCES:   ${{ steps.flags.outputs.sources }}
+          ROUTR_SIGNAL_PUBLISH:   ${{ steps.flags.outputs.publish }}
+          ROUTR_SIGNAL_COMMIT:    "0"
+        run: routr-signal
+
+      - name: Save pipeline state to Actions cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+
+      - name: Upload raw data + digest as private artifact (90-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output-${{ github.run_id }}
+          path: |
+            data/digests
+            data/raw
+            data/leads
+          retention-days: 90
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # SYNTHESIS: Sunday cron, build weekly essay, post to Discord, pre-create
+  # pending Beehiiv row
+  # ---------------------------------------------------------------------------
+  synthesis:
+    if: |
+      github.event.schedule == '0 14 * * 0' ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'synthesis')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore pipeline state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Run weekly synthesis
+        env:
+          ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
+          ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
+          ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+          DISCORD_WEBHOOK_URL:    ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: routr-synthesize
+
+      - name: Save pipeline state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+
+  # ---------------------------------------------------------------------------
+  # DISPATCH: poll Discord reactions, post via Buffer / Beehiiv
+  # ---------------------------------------------------------------------------
+  dispatch:
+    if: |
+      github.event.schedule == '15,30,45 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore pipeline state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Run dispatch worker
+        env:
+          DISCORD_BOT_TOKEN:      ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID:     ${{ secrets.DISCORD_CHANNEL_ID }}
+          BUFFER_ACCESS_TOKEN:    ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_ORG_ID:          ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_X_CHANNEL_ID:    ${{ secrets.BUFFER_X_CHANNEL_ID }}
+          BEEHIIV_API_KEY:        ${{ secrets.BEEHIIV_API_KEY }}
+          BEEHIIV_PUBLICATION_ID: ${{ secrets.BEEHIIV_PUBLICATION_ID }}
+        run: routr-dispatch
+
+      - name: Save pipeline state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+          key: ${{ env.PIPELINE_CACHE_KEY }}

@@ -133,7 +133,17 @@ def _ensure_runs_columns(conn: sqlite3.Connection) -> None:
     table, so when this code runs against an intel.db created before the
     `kind` or `discord_message_ids` columns existed, we need explicit
     ALTER TABLEs.
+
+    On a fresh database (no `runs` table yet), this is a no-op -- the
+    subsequent SCHEMA_SQL executescript will create the table with the
+    new columns from the start.
     """
+
+    table_exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
+    ).fetchone() is not None
+    if not table_exists:
+        return
 
     cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
     if "kind" not in cols:
