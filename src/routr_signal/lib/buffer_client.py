@@ -118,15 +118,16 @@ def list_channels(organization_id: str) -> list[dict[str, Any]]:
 CREATE_POST_MUTATION = """
 mutation CreatePost($input: CreatePostInput!) {
   createPost(input: $input) {
-    ... on PostActionResponse {
-      success
-      message
-      post { id status text createdAt sentAt }
+    __typename
+    ... on PostActionSuccess {
+      post { id status text createdAt sentAt dueAt channelId channelService }
     }
-    ... on ValidationError {
-      success
-      message
-    }
+    ... on NotFoundError       { message }
+    ... on UnauthorizedError   { message }
+    ... on UnexpectedError     { message }
+    ... on RestProxyError      { message link code }
+    ... on LimitReachedError   { message }
+    ... on InvalidInputError   { message }
   }
 }
 """
@@ -152,6 +153,10 @@ def create_post(
 
     `scheduling_type`: 'automatic' (publish via Buffer-Buffer auth) or
     'notification' (send a reminder; user posts manually). Default automatic.
+
+    Buffer's response is a UNION `PostActionPayload`; we resolve via the
+    `__typename` discriminator and raise `BufferError` on any non-success
+    variant with the upstream message embedded.
     """
 
     if mode not in VALID_SHARE_MODES:
@@ -175,25 +180,34 @@ def create_post(
 
     info(f"buffer: createPost channel={channel_id} mode={mode} len={len(text)}")
     data = _post_query(CREATE_POST_MUTATION, {"input": inp})
-    cp = data.get("createPost") or {}
-    if not cp.get("success", False):
-        msg = cp.get("message") or "(no message)"
-        raise BufferError(f"buffer: createPost not successful: {msg}")
+    cp = data.get("createPost")
+    if not isinstance(cp, dict):
+        raise BufferError(f"buffer: createPost returned no payload: {data!r}")
 
-    post_payload = cp.get("post") or {}
-    if not isinstance(post_payload, dict):
-        raise BufferError(f"buffer: createPost returned no post body: {cp!r}")
+    typename = cp.get("__typename") or ""
+    if typename == "PostActionSuccess":
+        post_payload = cp.get("post") or {}
+        if not isinstance(post_payload, dict):
+            raise BufferError(f"buffer: PostActionSuccess missing post body: {cp!r}")
+        post_id = post_payload.get("id")
+        if not isinstance(post_id, str):
+            raise BufferError(f"buffer: PostActionSuccess missing post.id: {post_payload!r}")
+        debug(f"buffer: createPost ok id={post_id} status={post_payload.get('status')}")
+        return CreatedPost(
+            id=post_id,
+            status=post_payload.get("status"),
+            text=post_payload.get("text"),
+            raw=post_payload,
+        )
 
-    post_id = post_payload.get("id")
-    if not isinstance(post_id, str):
-        raise BufferError(f"buffer: createPost response missing post.id: {post_payload!r}")
-
-    debug(f"buffer: createPost ok id={post_id} status={post_payload.get('status')}")
-    return CreatedPost(
-        id=post_id,
-        status=post_payload.get("status"),
-        text=post_payload.get("text"),
-        raw=post_payload,
+    # Any non-success variant carries a `message` (and sometimes a code/link).
+    msg = cp.get("message") or "(no message)"
+    code = cp.get("code")
+    link = cp.get("link")
+    raise BufferError(
+        f"buffer: createPost {typename or 'unknown'}: {msg}"
+        + (f" (code={code})" if code is not None else "")
+        + (f" link={link}" if link else "")
     )
 
 

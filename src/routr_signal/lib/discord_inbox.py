@@ -12,6 +12,7 @@ Used by `tasks/dispatch_approved.py`.
 
 from __future__ import annotations
 
+import time
 import urllib.parse
 from typing import Any
 
@@ -41,22 +42,40 @@ def get_message(channel_id: str, message_id: str) -> dict[str, Any]:
 
     Returns the message JSON, which includes a `reactions` array if any
     reactions exist. Each entry: `{"count": N, "me": bool, "emoji": {...}}`.
+
+    Handles Discord's 429 rate limit by sleeping for `retry_after` seconds
+    and retrying up to 3 times.
     """
 
     url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}"
-    try:
-        resp = httpx.get(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
-    except httpx.HTTPError as e:
-        raise DiscordError(f"discord: network error: {e}") from e
+    for attempt in range(3):
+        try:
+            resp = httpx.get(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
+        except httpx.HTTPError as e:
+            raise DiscordError(f"discord: network error: {e}") from e
 
-    if resp.status_code == 404:
-        return {}
-    if resp.status_code != 200:
-        raise DiscordError(f"discord: HTTP {resp.status_code} on getMessage: {resp.text[:300]!r}")
-    try:
-        return resp.json()
-    except ValueError as e:
-        raise DiscordError(f"discord: non-JSON response on getMessage") from e
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except ValueError as e:
+                raise DiscordError("discord: non-JSON response on getMessage") from e
+        if resp.status_code == 404:
+            return {}
+        if resp.status_code == 429:
+            retry_after = _retry_after_seconds(resp)
+            debug(
+                f"discord: 429 on getMessage {message_id}; sleeping {retry_after:.2f}s "
+                f"(attempt {attempt + 1}/3)"
+            )
+            time.sleep(retry_after)
+            continue
+        raise DiscordError(
+            f"discord: HTTP {resp.status_code} on getMessage: {resp.text[:300]!r}"
+        )
+
+    raise DiscordError(
+        f"discord: gave up on getMessage {message_id} after 3 rate-limit retries"
+    )
 
 
 def message_has_reaction(
@@ -98,7 +117,9 @@ def list_reaction_users(
 
     Useful for permission gating later (e.g., only act on reactions from
     the owner's user id). For now the dispatch worker doesn't gate; any
-    ✅ in the channel triggers a post.
+    approval emoji in the channel triggers a post.
+
+    Handles 429 the same way as `get_message`.
     """
 
     encoded = urllib.parse.quote(emoji, safe="")
@@ -106,22 +127,35 @@ def list_reaction_users(
         f"{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}"
         f"/reactions/{encoded}?limit={max(1, min(100, limit))}"
     )
-    try:
-        resp = httpx.get(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
-    except httpx.HTTPError as e:
-        raise DiscordError(f"discord: network error on listReactions: {e}") from e
+    for attempt in range(3):
+        try:
+            resp = httpx.get(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
+        except httpx.HTTPError as e:
+            raise DiscordError(f"discord: network error on listReactions: {e}") from e
 
-    if resp.status_code == 404:
-        return []
-    if resp.status_code != 200:
+        if resp.status_code == 200:
+            try:
+                users = resp.json()
+            except ValueError as e:
+                raise DiscordError("discord: non-JSON response on listReactions") from e
+            return users if isinstance(users, list) else []
+        if resp.status_code == 404:
+            return []
+        if resp.status_code == 429:
+            retry_after = _retry_after_seconds(resp)
+            debug(
+                f"discord: 429 on listReactions {message_id}; sleeping {retry_after:.2f}s "
+                f"(attempt {attempt + 1}/3)"
+            )
+            time.sleep(retry_after)
+            continue
         raise DiscordError(
             f"discord: HTTP {resp.status_code} on listReactions: {resp.text[:300]!r}"
         )
-    try:
-        users = resp.json()
-    except ValueError as e:
-        raise DiscordError(f"discord: non-JSON response on listReactions") from e
-    return users if isinstance(users, list) else []
+
+    raise DiscordError(
+        f"discord: gave up on listReactions {message_id} after 3 rate-limit retries"
+    )
 
 
 def add_bot_reaction(channel_id: str, message_id: str, emoji: str) -> bool:
@@ -130,6 +164,8 @@ def add_bot_reaction(channel_id: str, message_id: str, emoji: str) -> bool:
     Used by the dispatch worker to mark a message as 'processed' so the next
     poll doesn't re-trigger. The bot adds a different emoji than the
     trigger one (e.g., bot adds 🚀 after posting; trigger was ✅).
+
+    Returns True on success, False on persistent failure. Handles 429.
     """
 
     encoded = urllib.parse.quote(emoji, safe="")
@@ -137,15 +173,27 @@ def add_bot_reaction(channel_id: str, message_id: str, emoji: str) -> bool:
         f"{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}"
         f"/reactions/{encoded}/@me"
     )
-    try:
-        resp = httpx.put(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
-    except httpx.HTTPError as e:
-        warn(f"discord: add_bot_reaction network error: {e}")
+    for attempt in range(3):
+        try:
+            resp = httpx.put(url, headers=_headers(), timeout=DEFAULT_TIMEOUT)
+        except httpx.HTTPError as e:
+            warn(f"discord: add_bot_reaction network error: {e}")
+            return False
+
+        if resp.status_code in (200, 204):
+            return True
+        if resp.status_code == 429:
+            retry_after = _retry_after_seconds(resp)
+            debug(
+                f"discord: 429 on add_bot_reaction {message_id}; sleeping {retry_after:.2f}s "
+                f"(attempt {attempt + 1}/3)"
+            )
+            time.sleep(retry_after)
+            continue
+        warn(f"discord: add_bot_reaction HTTP {resp.status_code}: {resp.text[:200]!r}")
         return False
 
-    if resp.status_code in (200, 204):
-        return True
-    warn(f"discord: add_bot_reaction HTTP {resp.status_code}: {resp.text[:200]!r}")
+    warn(f"discord: gave up on add_bot_reaction {message_id} after 3 rate-limit retries")
     return False
 
 
@@ -177,3 +225,24 @@ def is_configured() -> bool:
         return True
     except Exception:
         return False
+
+
+
+def _retry_after_seconds(resp: httpx.Response) -> float:
+    """Parse Discord's Retry-After (header or JSON body). Defaults to 1.0s
+    when missing/unparseable."""
+
+    hdr = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+    if hdr:
+        try:
+            return max(0.1, float(hdr))
+        except ValueError:
+            pass
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        return 1.0
+    ra = body.get("retry_after") if isinstance(body, dict) else None
+    if isinstance(ra, (int, float)):
+        return max(0.1, float(ra))
+    return 1.0
