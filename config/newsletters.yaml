@@ -11,9 +11,8 @@ feeds:
     url: https://www.latent.space/feed
     max_items_per_run: 10
 
-  - name: the-batch
-    url: https://www.deeplearning.ai/the-batch/feed/
-    max_items_per_run: 10
+  # The Batch (deeplearning.ai) does not expose an RSS feed on the new
+  # thebatch.ai SPA as of 2026-05-17. Treat as manual paste-in if needed.
 
   - name: import-ai
     url: https://jack-clark.net/feed/
@@ -32,7 +31,8 @@ feeds:
     max_items_per_run: 12
 
   - name: hamel-husain
-    url: https://hamel.dev/blog/blog.xml
+    # Quarto blog index feed (verified 2026-05-17).
+    url: https://hamel.dev/index.xml
     max_items_per_run: 6
 
 # Per-request throttle and UA shared across feeds.
