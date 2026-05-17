@@ -34,7 +34,13 @@ from ..lib.logging import error, info, warn
 
 
 # Emoji conventions
-HOOK_APPROVAL_EMOJI = "✅"           # user reacts: post x_thread to X
+# Either of these on a daily digest message approves the auto-postable hook
+# (currently x_thread only) for posting to X via Buffer. ✅ is the explicit
+# convention; 👍 is allowed because it's the universal "approve" gesture and
+# nothing else competes for that meaning in this channel.
+HOOK_APPROVAL_EMOJIS: tuple[str, ...] = ("✅", "👍")
+HOOK_APPROVAL_EMOJI = HOOK_APPROVAL_EMOJIS[0]   # back-compat alias for tests / docs
+
 SYNTHESIS_APPROVAL_EMOJI = "📰"      # user reacts: send synthesis to Beehiiv as draft
 BOT_PROCESSED_MARKER = "🚀"          # bot reacts after successful dispatch
 BOT_FAILED_MARKER = "❌"             # bot reacts after a failed dispatch
@@ -106,21 +112,25 @@ def _handle_daily_run(
         warn(f"dispatch_approved[daily/{run_id}]: Buffer not configured; cannot dispatch")
         return (0, 0, len(pending))
 
-    # Skip if already marked.
+    # Skip if we've already processed this run (bot's marker present on any message).
     if any(
         discord_inbox.has_bot_marker_reaction(channel_id, mid, BOT_PROCESSED_MARKER)
         for mid in msg_ids
     ):
         return (0, 0, len(pending))
 
+    # Approval = any of HOOK_APPROVAL_EMOJIS on any of the run's messages.
     if not any(
-        discord_inbox.message_has_reaction(channel_id, mid, HOOK_APPROVAL_EMOJI)
+        discord_inbox.message_has_reaction(channel_id, mid, emoji)
+        for emoji in HOOK_APPROVAL_EMOJIS
         for mid in msg_ids
     ):
         return (0, 0, len(pending))
 
+    triggering_emoji = _find_triggering_emoji(channel_id, msg_ids, HOOK_APPROVAL_EMOJIS)
+
     info(
-        f"dispatch_approved[daily/{run_id}]: approval detected; "
+        f"dispatch_approved[daily/{run_id}]: approval ({triggering_emoji}) detected; "
         f"posting {len(pending)} pending hook(s)"
     )
 
@@ -145,7 +155,7 @@ def _handle_daily_run(
                 p["id"],
                 status="failed",
                 error=str(e)[:500],
-                discord_reaction=HOOK_APPROVAL_EMOJI,
+                discord_reaction=triggering_emoji,
                 approved=True,
             )
             failed += 1
@@ -155,7 +165,7 @@ def _handle_daily_run(
             p["id"],
             status="posted",
             buffer_post_id=created.id,
-            discord_reaction=HOOK_APPROVAL_EMOJI,
+            discord_reaction=triggering_emoji,
             approved=True,
             posted=True,
         )
@@ -306,6 +316,27 @@ def _derive_title_from_synthesis(post_row: dict[str, Any]) -> str:
 def _truncate(s: str, n: int) -> str:
     s = s.strip()
     return s if len(s) <= n else (s[: n - 1].rstrip() + "...")
+
+
+
+def _find_triggering_emoji(
+    channel_id: str,
+    msg_ids: list[str],
+    candidates: tuple[str, ...],
+) -> str:
+    """Return whichever approval emoji is present on any of the run's messages.
+
+    Used by `update_post_status(discord_reaction=...)` so we can audit which
+    convention the user actually used. Falls back to the first candidate if
+    no match is found (shouldn't happen because we only call this after
+    confirming a reaction exists, but defensive).
+    """
+
+    for emoji in candidates:
+        for mid in msg_ids:
+            if discord_inbox.message_has_reaction(channel_id, mid, emoji):
+                return emoji
+    return candidates[0]
 
 
 def cli() -> None:
