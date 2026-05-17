@@ -70,5 +70,9 @@ PLAN_v2.md
 prompt.md
 scratch/
 
+# Serena MCP project state (memories, project config, language-server cache).
+# Sensitive: contains current-state context, decisions, security notes.
+.serena/
+
 # Manual Discord paste-ins may include third-party content \u2014 author chooses what to push
 data/manual/
