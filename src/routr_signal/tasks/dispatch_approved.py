@@ -101,7 +101,14 @@ def _handle_daily_run(
     run_row: dict[str, Any],
     msg_ids: list[str],
 ) -> tuple[int, int, int]:
-    """Returns (processed, failed, skipped)."""
+    """Returns (processed, failed, skipped).
+
+    Each Discord message is fetched at most ONCE per poll (held in
+    `msg_snapshots`); marker and approval checks are scanned over the
+    cached `reactions` list rather than re-hitting the REST API. This
+    keeps the per-poll Discord call count to O(messages) and well under
+    the per-channel rate limit even on busy days.
+    """
 
     run_id = run_row["id"]
     pending = signal_store.pending_posts_for_run(run_id)
@@ -112,22 +119,30 @@ def _handle_daily_run(
         warn(f"dispatch_approved[daily/{run_id}]: Buffer not configured; cannot dispatch")
         return (0, 0, len(pending))
 
-    # Skip if we've already processed this run (bot's marker present on any message).
-    if any(
-        discord_inbox.has_bot_marker_reaction(channel_id, mid, BOT_PROCESSED_MARKER)
-        for mid in msg_ids
-    ):
+    # Fetch each message exactly once.
+    msg_snapshots: dict[str, dict[str, Any]] = {}
+    for mid in msg_ids:
+        try:
+            snap = discord_inbox.get_message(channel_id, mid)
+        except discord_inbox.DiscordError as e:
+            warn(f"dispatch_approved[daily/{run_id}]: get_message {mid} failed: {e}")
+            continue
+        if snap:
+            msg_snapshots[mid] = snap
+
+    if not msg_snapshots:
+        warn(f"dispatch_approved[daily/{run_id}]: no Discord messages reachable")
         return (0, 0, len(pending))
 
-    # Approval = any of HOOK_APPROVAL_EMOJIS on any of the run's messages.
-    if not any(
-        discord_inbox.message_has_reaction(channel_id, mid, emoji)
-        for emoji in HOOK_APPROVAL_EMOJIS
-        for mid in msg_ids
-    ):
+    # Already processed by a prior dispatch (bot marker present anywhere)?
+    if any(_has_emoji_from_self(snap, BOT_PROCESSED_MARKER) for snap in msg_snapshots.values()):
         return (0, 0, len(pending))
 
-    triggering_emoji = _find_triggering_emoji(channel_id, msg_ids, HOOK_APPROVAL_EMOJIS)
+    # Look for any approval emoji from anyone (the bot's own reactions count too;
+    # see HOOK_APPROVAL_EMOJIS docstring for the security rationale).
+    triggering_emoji = _scan_for_approval(msg_snapshots.values(), HOOK_APPROVAL_EMOJIS)
+    if triggering_emoji is None:
+        return (0, 0, len(pending))
 
     info(
         f"dispatch_approved[daily/{run_id}]: approval ({triggering_emoji}) detected; "
@@ -193,6 +208,8 @@ def _handle_synthesis_run(
     run_row: dict[str, Any],
     msg_ids: list[str],
 ) -> tuple[int, int, int]:
+    """Same pattern as _handle_daily_run but for synthesis runs."""
+
     run_id = run_row["id"]
     pending = signal_store.pending_posts_for_run(run_id)
     if not pending:
@@ -202,16 +219,24 @@ def _handle_synthesis_run(
         warn(f"dispatch_approved[synthesis/{run_id}]: Beehiiv not configured; cannot dispatch")
         return (0, 0, len(pending))
 
-    if any(
-        discord_inbox.has_bot_marker_reaction(channel_id, mid, BOT_PROCESSED_MARKER)
-        for mid in msg_ids
-    ):
+    msg_snapshots: dict[str, dict[str, Any]] = {}
+    for mid in msg_ids:
+        try:
+            snap = discord_inbox.get_message(channel_id, mid)
+        except discord_inbox.DiscordError as e:
+            warn(f"dispatch_approved[synthesis/{run_id}]: get_message {mid} failed: {e}")
+            continue
+        if snap:
+            msg_snapshots[mid] = snap
+
+    if not msg_snapshots:
         return (0, 0, len(pending))
 
-    if not any(
-        discord_inbox.message_has_reaction(channel_id, mid, SYNTHESIS_APPROVAL_EMOJI)
-        for mid in msg_ids
-    ):
+    if any(_has_emoji_from_self(snap, BOT_PROCESSED_MARKER) for snap in msg_snapshots.values()):
+        return (0, 0, len(pending))
+
+    triggering_emoji = _scan_for_approval(msg_snapshots.values(), (SYNTHESIS_APPROVAL_EMOJI,))
+    if triggering_emoji is None:
         return (0, 0, len(pending))
 
     info(
@@ -238,7 +263,7 @@ def _handle_synthesis_run(
                 p["id"],
                 status="failed",
                 error=str(e)[:500],
-                discord_reaction=SYNTHESIS_APPROVAL_EMOJI,
+                discord_reaction=triggering_emoji,
                 approved=True,
             )
             failed += 1
@@ -249,7 +274,7 @@ def _handle_synthesis_run(
             status="posted",
             beehiiv_post_id=created.id,
             external_url=created.web_url,
-            discord_reaction=SYNTHESIS_APPROVAL_EMOJI,
+            discord_reaction=triggering_emoji,
             approved=True,
             posted=True,
         )
@@ -324,19 +349,52 @@ def _find_triggering_emoji(
     msg_ids: list[str],
     candidates: tuple[str, ...],
 ) -> str:
-    """Return whichever approval emoji is present on any of the run's messages.
-
-    Used by `update_post_status(discord_reaction=...)` so we can audit which
-    convention the user actually used. Falls back to the first candidate if
-    no match is found (shouldn't happen because we only call this after
-    confirming a reaction exists, but defensive).
-    """
+    """Deprecated: kept for backwards compat with any old import paths.
+    Prefer scanning a cached snapshot via `_scan_for_approval`."""
 
     for emoji in candidates:
         for mid in msg_ids:
             if discord_inbox.message_has_reaction(channel_id, mid, emoji):
                 return emoji
     return candidates[0]
+
+
+def _has_emoji_from_self(snapshot: dict[str, Any], emoji: str) -> bool:
+    """True if the bot's own reaction `emoji` is present on this message."""
+
+    for r in snapshot.get("reactions") or []:
+        if not isinstance(r, dict):
+            continue
+        if not r.get("me"):
+            continue
+        e = r.get("emoji") or {}
+        if isinstance(e, dict) and e.get("name") == emoji:
+            return True
+    return False
+
+
+def _scan_for_approval(
+    snapshots: Any,
+    candidates: tuple[str, ...],
+) -> str | None:
+    """Find the first approval emoji present on any of the cached snapshots.
+
+    `snapshots` is an iterable of message JSON objects (the values of the
+    snapshot dict). Returns the emoji string if any candidate is present
+    on any message, else None.
+    """
+
+    for snap in snapshots:
+        for r in snap.get("reactions") or []:
+            if not isinstance(r, dict):
+                continue
+            e = r.get("emoji") or {}
+            if not isinstance(e, dict):
+                continue
+            name = e.get("name")
+            if isinstance(name, str) and name in candidates:
+                return name
+    return None
 
 
 def cli() -> None:
