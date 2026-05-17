@@ -248,12 +248,19 @@ jobs:
           python -m pip install -e .
 
       - name: Restore pipeline state
+        # Path list MUST match the daily / synthesis jobs exactly, otherwise
+        # actions/cache treats them as different "cache versions" and the
+        # dispatch worker can't see the daily's intel.db. Include the
+        # anchors-*.json glob even though dispatch doesn't read it -- the
+        # version hash depends on the path list, not on whether the file is
+        # used.
         uses: actions/cache/restore@v4
         with:
           path: |
             data/intel.db
             data/intel.db-shm
             data/intel.db-wal
+            data/cache/anchors-*.json
           key: ${{ env.PIPELINE_CACHE_KEY }}
           restore-keys: |
             pipeline-state-
@@ -277,4 +284,5 @@ jobs:
             data/intel.db
             data/intel.db-shm
             data/intel.db-wal
+            data/cache/anchors-*.json
           key: ${{ env.PIPELINE_CACHE_KEY }}
