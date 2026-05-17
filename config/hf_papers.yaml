@@ -1,0 +1,47 @@
+# HuggingFace Papers source.
+#
+# Pulls papers from the curated `/api/daily_papers` JSON endpoint that backs
+# https://huggingface.co/papers (the "Daily Papers" tab). Each item has a
+# title, abstract, arxiv id, and submission timestamp.
+#
+# Why this source:
+#   Practitioner pain on infrastructure often surfaces in academic papers
+#   6-12 weeks before it shows up in community discussion. Cheap leading
+#   indicator; low-cosine-noise vs Twitter/Reddit because the corpus is small
+#   and on-topic.
+
+# How many days back to pull. Daily Papers archives by day, so a small window
+# is enough to catch overnight additions; larger windows let us backfill.
+lookback_days: 3
+
+# Max items to pull per run across all queried days, after dedupe.
+max_items_per_run: 40
+
+# Optional filter: only keep papers whose title or abstract contains at
+# least one of these substrings (case-insensitive). Empty list = no filter
+# (the global keyword prefilter in config/keywords.yaml still applies).
+title_or_abstract_must_match_any:
+  - llm
+  - gateway
+  - inference
+  - serving
+  - agent
+  - mcp
+  - retrieval
+  - cache
+  - latency
+  - throughput
+  - cost
+  - routing
+  - context
+  - tool
+  - eval
+  - benchmark
+  - quantization
+  - distillation
+  - speculative
+  - mixture of experts
+
+# HTTP throttle. HF's API is friendly but be polite.
+min_seconds_between_requests: 1.5
+user_agent: "routr-signal-engine/0.1 (+https://github.com/beiyonder/routr-signal-engine)"

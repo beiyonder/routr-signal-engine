@@ -20,9 +20,9 @@ State storage:
 
 from __future__ import annotations
 
-import os
 import sys
 import uuid
+from typing import Any
 
 from .classify import lead_extractor, pain_signal, post_drafter
 from .classify import voice_lint
@@ -33,7 +33,15 @@ from .lib.logging import error, info, warn
 from .lib.paths import today_utc
 from .lib.types import ClassifiedItem, Digest, Lead, RawItem
 from .output import discord, email, leads_queue, markdown_digest, slack
-from .sources import discord_paste, github_issues, hn, reddit, twitter
+from .sources import (
+    discord_paste,
+    github_issues,
+    hf_papers,
+    hn,
+    newsletters,
+    reddit,
+    twitter,
+)
 
 
 SOURCE_REGISTRY = {
@@ -42,9 +50,19 @@ SOURCE_REGISTRY = {
     "github_issues": github_issues.fetch,
     "twitter": twitter.fetch,
     "discord_paste": discord_paste.fetch,
+    "hf_papers": hf_papers.fetch,
+    "newsletters": newsletters.fetch,
 }
 
-DEFAULT_SOURCES = ["hn", "reddit", "github_issues", "twitter", "discord_paste"]
+DEFAULT_SOURCES = [
+    "hn",
+    "reddit",
+    "github_issues",
+    "twitter",
+    "discord_paste",
+    "hf_papers",
+    "newsletters",
+]
 TOP_SIGNALS_FOR_DIGEST = 5
 MIN_SCORE_FOR_DIGEST = 0.55
 
@@ -61,7 +79,7 @@ def _run_id() -> str:
 def run() -> int:
     today = today_utc()
     run_id = _run_id()
-    signal_store.open_run(run_id)
+    signal_store.open_run(run_id, kind="daily")
     info(f"=== routr-signal-engine run {run_id} for {today} ===")
 
     publish = env_flag("ROUTR_SIGNAL_PUBLISH", default=True)
@@ -170,11 +188,21 @@ def run() -> int:
         leads_queue.append(leads)
 
     # 7. Publish
+    discord_msg_ids: list[str] = []
     if publish:
         ok_slack = slack.publish(digest)
-        ok_discord = discord.publish(digest)
+        discord_msg_ids = discord.publish(digest)
         ok_email = email.publish(digest)
-        info(f"publish: slack={ok_slack} discord={ok_discord} email={ok_email}")
+        info(
+            f"publish: slack={ok_slack} "
+            f"discord={len(discord_msg_ids)}-msg(s) "
+            f"email={ok_email}"
+        )
+        # 7a. Record digest message IDs for the dispatch worker to poll later,
+        # and pre-create one 'pending' post row per auto-postable hook.
+        if discord_msg_ids:
+            signal_store.record_run_discord_messages(run_id, discord_msg_ids)
+            _enqueue_pending_hooks(run_id, hooks, discord_msg_ids)
     else:
         info("publish: skipped (ROUTR_SIGNAL_PUBLISH=0)")
 
@@ -234,6 +262,54 @@ def _build_digest(
         source_counts=source_counts,
         notes=list(notes),
     )
+
+
+
+# Hook formats that the dispatch worker can auto-publish on approval.
+# Today: only x_thread (via Buffer + the user's connected X profile).
+# Reddit / HN / Dev.to / LinkedIn drafts remain reference text for the user.
+AUTO_DISPATCHABLE_HOOK_FORMATS: tuple[str, ...] = ("x_thread",)
+
+
+def _enqueue_pending_hooks(
+    run_id: str,
+    hooks: list[Any],
+    discord_msg_ids: list[str],
+) -> None:
+    """Pre-create one `pending` post per auto-dispatchable hook so the
+    dispatch worker has a concrete row to promote when it sees a reaction.
+
+    We attach the pending post to the LAST Discord message that landed --
+    when the digest splits across two messages, hooks live in the second
+    one. If only one message exists, we use it. The dispatch worker checks
+    reactions on every message id recorded against the run, so this
+    attachment is informational rather than strictly required.
+    """
+
+    import uuid as _uuid
+
+    if not hooks or not discord_msg_ids:
+        return
+
+    anchor_msg_id = discord_msg_ids[-1]
+    for hook in hooks:
+        fmt = getattr(hook, "format", None)
+        if fmt not in AUTO_DISPATCHABLE_HOOK_FORMATS:
+            continue
+        post_id = f"post-{_uuid.uuid4().hex[:12]}"
+        signal_store.insert_post(
+            post_id=post_id,
+            kind="hook",
+            platform="x",
+            text=hook.text,
+            status="pending",
+            run_id=run_id,
+            hook_format=fmt,
+            signal_id=getattr(hook, "anchor_signal_id", None),
+            discord_message_id=anchor_msg_id,
+            metadata={"source_message_ids": list(discord_msg_ids)},
+        )
+        info(f"posts: enqueued pending {fmt} hook -> {post_id} (signal={hook.anchor_signal_id})")
 
 
 def cli() -> None:

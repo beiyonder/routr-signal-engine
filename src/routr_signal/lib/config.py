@@ -49,6 +49,27 @@ def twitter_watch() -> dict[str, Any]:
     return _load_yaml(path)
 
 
+
+@lru_cache(maxsize=1)
+def hf_papers() -> dict[str, Any]:
+    """HuggingFace Papers source config. Returns {} if file is absent (source becomes a no-op)."""
+
+    path = config_dir() / "hf_papers.yaml"
+    if not path.exists():
+        return {}
+    return _load_yaml(path)
+
+
+@lru_cache(maxsize=1)
+def newsletters() -> dict[str, Any]:
+    """Newsletter RSS source config. Returns {} if file is absent (source becomes a no-op)."""
+
+    path = config_dir() / "newsletters.yaml"
+    if not path.exists():
+        return {}
+    return _load_yaml(path)
+
+
 @lru_cache(maxsize=None)
 def prompt(name: str) -> str:
     """Load a system prompt from config/prompts/<name>.md."""

@@ -76,32 +76,37 @@ HOOK_LABELS = {
 }
 
 
-def publish(digest: Digest) -> bool:
-    """POST the digest to $DISCORD_WEBHOOK_URL. Returns True if at least one message landed."""
+def publish(digest: Digest) -> list[str]:
+    """POST the digest to $DISCORD_WEBHOOK_URL. Returns the list of Discord
+    message IDs that landed (empty list = no message posted).
+
+    The IDs are persisted on the runs row so the dispatch worker can poll
+    them for reactions later.
+    """
 
     raw_url = env("DISCORD_WEBHOOK_URL")
     if not raw_url:
         info("discord: DISCORD_WEBHOOK_URL not set, skipping.")
-        return False
+        return []
 
     url = _normalize_url(raw_url)
     messages = _build_messages(digest)
 
     if not messages:
         info("discord: nothing to send (no signals, hooks, or leads).")
-        return False
+        return []
 
-    successes = 0
+    posted_ids: list[str] = []
     for i, payload in enumerate(messages):
         if i > 0:
             # Discord rate limit: 5 req per 2s per webhook. 0.5s pause is plenty.
             time.sleep(0.5)
-        ok = _post_one(url, payload, message_index=i + 1, total=len(messages))
-        if ok:
-            successes += 1
+        msg_id = _post_one(url, payload, message_index=i + 1, total=len(messages))
+        if msg_id:
+            posted_ids.append(msg_id)
 
-    info(f"discord: {successes}/{len(messages)} message(s) posted")
-    return successes > 0
+    info(f"discord: {len(posted_ids)}/{len(messages)} message(s) posted ids={posted_ids}")
+    return posted_ids
 
 
 # -----------------------------------------------------------------------------
@@ -300,18 +305,50 @@ def _leads_embed(leads: list[Lead]) -> dict[str, Any]:
 # Posting
 # -----------------------------------------------------------------------------
 
-def _post_one(url: str, payload: dict[str, Any], *, message_index: int, total: int) -> bool:
-    """Send one webhook message with retries for 429."""
+def _post_one(url: str, payload: dict[str, Any], *, message_index: int, total: int) -> str | None:
+    """Send one webhook message with retries for 429.
+
+    Uses `?wait=true` so Discord returns the created message JSON; we extract
+    `message.id` for the dispatch worker to later poll for reactions.
+
+    Returns the message id on success, None on failure.
+    """
+
+    # `?wait=true` forces Discord to wait for the message to commit and return its
+    # full body (including id). Without it, the response is 204 No Content and we
+    # have no way to know which message we just sent.
+    post_url = url if "?" in url else f"{url}?wait=true"
 
     for attempt in range(3):
         try:
-            resp = httpx.post(url, json=payload, timeout=20.0)
+            resp = httpx.post(post_url, json=payload, timeout=20.0)
         except httpx.HTTPError as e:
             warn(f"discord: POST failed ({message_index}/{total}): {e}")
-            return False
+            return None
 
         if resp.status_code in (200, 204):
-            return True
+            if resp.status_code == 204:
+                # We asked for wait=true; 204 means the URL got cleaned of the
+                # query string somewhere. Best-effort fallback: return None so
+                # the run still records nothing rather than a fake id.
+                warn(
+                    f"discord: 204 returned for message {message_index}/{total} "
+                    "despite wait=true; message id unknown"
+                )
+                return None
+            try:
+                body = resp.json()
+            except Exception as e:  # noqa: BLE001
+                warn(f"discord: response not JSON for message {message_index}/{total}: {e}")
+                return None
+            msg_id = body.get("id") if isinstance(body, dict) else None
+            if not isinstance(msg_id, str):
+                warn(
+                    f"discord: response body missing string id for message "
+                    f"{message_index}/{total}: {body!r}"
+                )
+                return None
+            return msg_id
 
         if resp.status_code == 429:
             # Honor Retry-After.
@@ -327,10 +364,10 @@ def _post_one(url: str, payload: dict[str, Any], *, message_index: int, total: i
             f"discord: webhook returned {resp.status_code} for message {message_index}/{total}: "
             f"{resp.text[:300]!r}"
         )
-        return False
+        return None
 
     warn(f"discord: gave up on message {message_index}/{total} after 3 rate-limit retries")
-    return False
+    return None
 
 
 # -----------------------------------------------------------------------------

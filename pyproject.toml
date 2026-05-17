@@ -33,7 +33,9 @@ reddit-praw = [
 ]
 
 [project.scripts]
-routr-signal = "routr_signal.main:cli"
+routr-signal      = "routr_signal.main:cli"
+routr-synthesize  = "routr_signal.tasks.weekly_synthesis:cli"
+routr-dispatch    = "routr_signal.tasks.dispatch_approved:cli"
 
 [build-system]
 requires = ["hatchling"]

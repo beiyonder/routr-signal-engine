@@ -18,18 +18,16 @@ LLM cost target: **<$10/month**.
 
 ## Source map
 
-| Source           | Phase | Endpoint                                                                 | Auth                  | Rate budget                 |
-|------------------|-------|--------------------------------------------------------------------------|-----------------------|-----------------------------|
-| Hacker News      | 1     | `hn.algolia.com/api/v1/search_by_date`                                   | none                  | 10k/hr/IP, 1k hits/query    |
-| Reddit           | 2     | `old.reddit.com/r/<sub>/new.rss` + `/search.rss`                         | none, descriptive UA  | self-imposed 1 req / 3s     |
-| GitHub issues    | 3     | `api.github.com/repos/<owner>/<repo>/issues`                             | `GITHUB_TOKEN`        | 1,000/hr/repo (Actions)     |
-| HF papers        | 5     | `huggingface.co/papers` RSS                                              | none                  | once/day                    |
-| Dev.to           | 5     | `dev.to/feed/tag/<tag>` (llmops, openai, anthropic, langchain)           | none                  | once/day                    |
-| Newsletters      | 5     | Substack RSS bundle (Latent Space, Pointer.io, Ben's Bites)              | none                  | once/day                    |
-| TokScale         | weekly| `tokscale.ai` via Firecrawl                                              | Firecrawl free        | 1 scrape/week               |
-| OpenRouter apps  | weekly| `openrouter.ai/apps` via Firecrawl                                       | Firecrawl free        | 1 scrape/week               |
-| Awesome lists    | weekly| Git clone tensorchord/awesome-llmops, punkpeye/awesome-mcp-servers, etc. | none                  | git clone                   |
-| Twitter / X      | v1.5  | Self-hosted `book000/twitter-rss` publishing to gh-pages                 | burner X account      | hourly cron                 |
+| Source           | Status | Endpoint                                                                 | Auth                  | Config                          |
+|------------------|--------|--------------------------------------------------------------------------|-----------------------|---------------------------------|
+| Hacker News      | live   | `hn.algolia.com/api/v1/search_by_date`                                   | none                  | `config/hn.yaml`                |
+| Reddit           | live   | `old.reddit.com/r/<sub>/new.rss` + Android-OAuth fallback                | anon installed-client | `config/subreddits.yaml`        |
+| GitHub issues    | live   | `api.github.com/repos/<owner>/<repo>/issues`                             | `GITHUB_TOKEN`        | `config/github_repos.yaml`      |
+| X / Twitter      | live   | Playwright + imported cookies                                            | session cookie jar    | `config/twitter_watch.yaml`     |
+| Discord (manual) | live   | parse `data/manual/discord-pastes/*.md`                                  | none                  | n/a (paste-in)                  |
+| HF Papers        | live   | `huggingface.co/api/daily_papers`                                        | none                  | `config/hf_papers.yaml`         |
+| Newsletters      | live   | RSS bundle: Latent Space, The Batch, Import AI, Simon Willison, ...      | none                  | `config/newsletters.yaml`       |
+| Dev.to           | future | `dev.to/feed/tag/<tag>`                                                  | none                  |                                 |
 
 Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `Helicone/helicone`, `maximhq/bifrost`. Edit `config/github_repos.yaml` to extend.
 
@@ -39,29 +37,67 @@ Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `
 07:00 UTC  daily-signals.yml
   │
   ├─ fetch (sequential, ~90s)
-  │    sources/hn.py        → data/raw/hn/YYYY-MM-DD.json
-  │    sources/reddit.py    → data/raw/reddit/YYYY-MM-DD.json
-  │    sources/github_issues.py → data/raw/github_issues/YYYY-MM-DD.json
-  │    each updates data/seen/<source>.json (dedupe)
+  │    sources/hn.py, reddit.py, github_issues.py, twitter.py,
+  │    discord_paste.py, hf_papers.py, newsletters.py
+  │    each upserts RawItems into signals table; dedupe by primary key
   │
-  ├─ classify (one Claude call per source, ~20s total)
-  │    classify/pain_signal.py  → list of {item, score, why, suggested_angle}
-  │    classify/lead_extractor.py → list of usernames + GitHub URLs
+  ├─ cosine prefilter (Gemini embeddings, ~5s)
+  │    lib/cosine.py + lib/embeddings.py
+  │    drops obviously off-topic items before paying classifier tokens
   │
-  ├─ draft (one Claude call, ~5s)
+  ├─ classify (Claude Haiku, chunks of 15, ~30s total)
+  │    classify/pain_signal.py → topics, score, pain_summary, engagement_angle
+  │
+  ├─ draft (Gemini 3 Pro, ~10s)
   │    classify/post_drafter.py → 5 post hooks
+  │    classify/voice_lint.py → soft warnings on em-dash/emoji/banned phrases
   │
-  ├─ compose
-  │    output/markdown_digest.py → data/digests/YYYY-MM-DD.md
+  ├─ persist
+  │    output/markdown_digest.py → data/digests/YYYY-MM-DD.md (gitignored)
+  │    update `signals` rows: rank_in_run, action_label='queued'
+  │    close `runs` row with status, counts, digest_md, hooks_json
   │
-  ├─ distribute
-  │    output/slack.py   → POST $SLACK_WEBHOOK_URL
-  │    output/discord.py → POST $DISCORD_WEBHOOK_URL (slack-compat)
-  │    output/email.py   → SMTP send
-  │
-  └─ commit
-       git add data/ && git commit -m "digest YYYY-MM-DD" && git push
+  └─ distribute
+       output/discord.py → POST $DISCORD_WEBHOOK_URL?wait=true (native embeds)
+       captures message IDs back; records on runs.discord_message_ids
+       pre-creates one `posts` row per auto-dispatchable hook (status='pending')
+       output/slack.py + output/email.py (optional, off by default in CI)
 ```
+
+## Distribution flow (added 2026-05-17)
+
+After the daily digest lands in Discord, two cron-driven workers handle
+out-of-band publishing without any new infrastructure:
+
+```
+[user reacts ✅ on a digest message]
+
+dispatch-approved.yml   (every 15 min, on :15/:30/:45)
+  │
+  ├─ poll Discord REST API for reactions on recent runs' message IDs
+  │    lib/discord_inbox.py — bot token, no gateway connection
+  │
+  ├─ for each `pending` post matching an approved run + emoji:
+  │    daily / ✅       → buffer_client.create_post(channel=BUFFER_X_CHANNEL_ID)
+  │    synthesis / 📰   → beehiiv_client.create_draft_post(...)
+  │
+  └─ promote post: pending → posted (with buffer/beehiiv id + URL)
+     bot reacts 🚀 on the message so the next poll skips it (or ❌ on failure)
+```
+
+```
+weekly-synthesis.yml    (Sundays 14:00 UTC)
+  │
+  ├─ aggregate last 7 days of signals; pick top 10 by combined_score
+  ├─ classify/synthesize.py → 400-500 word essay via flagship drafter model
+  ├─ post to Discord as a "synthesis draft" message
+  ├─ pre-create a `pending` Beehiiv post
+  └─ user reacts 📰 to push the draft to Beehiiv (sends as draft;
+     user reviews and clicks Send in Beehiiv UI when ready)
+```
+
+LinkedIn is **intentionally not auto-wired**: the user posts to LinkedIn
+manually from the digest text. The Buffer channel set is X-only.
 
 ## Failure modes
 
@@ -75,14 +111,20 @@ Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `
 
 ## Dedupe strategy
 
-`data/seen/<source>.json` is a JSON list of item IDs the pipeline has already seen.
-Each source module:
-1. Loads its `seen` set at start.
-2. Filters fresh items to those whose ID is not in `seen`.
-3. Adds the new IDs to `seen` and saves.
-4. Returns the fresh items to the orchestrator.
+Dedupe lives in the SQLite `signals` table — the existence of a row IS the
+dedupe state (primary key on `id`, a globally-unique string of the form
+`<source>-<source_id>`).
 
-Files committed to repo so dedupe state survives between runs.
+Each source module:
+1. Opens `SeenStore(<source>)`, which pre-loads the known IDs for that source.
+2. For each fetched item, checks `seen.has(item.id)`; skips if known.
+3. `seen.add_item(raw_item)` does `INSERT OR IGNORE` into `signals` and adds
+   the id to the in-memory set.
+
+The SQLite file at `data/intel.db` is gitignored. State travels between CI
+runs via the Actions cache (10 GB, 7-day idle eviction). The `data/digests/`,
+`data/raw/`, `data/leads/` outputs are uploaded as 90-day artifacts so old
+runs are recoverable via `gh run download`.
 
 ## Local development
 
@@ -105,14 +147,25 @@ $env:ROUTR_SIGNAL_PUBLISH="0"; uv run routr-signal
 
 ## Roadmap
 
-| Phase | Status | What                                                                       |
-|-------|--------|----------------------------------------------------------------------------|
-| 0     | done   | Scaffold, configs, workflow skeleton                                       |
-| 1     | next   | HN source → Claude classify → Slack POST (the smallest end-to-end slice)   |
-| 2     | next   | Reddit source                                                              |
-| 3     | next   | GitHub issues source                                                       |
-| 4     | next   | Markdown digest + Discord + email + repo commit-back + 5-flavor drafter    |
-| 5     | later  | HF papers, Dev.to, newsletters                                             |
-| 6     | later  | Weekly snapshots (TokScale, OpenRouter, Awesome lists)                     |
-| 7     | later  | Twitter via self-hosted `book000/twitter-rss` on gh-pages                  |
-| 8     | later  | Hourly health-check workflow                                               |
+| Phase   | Status   | What                                                                          |
+|---------|----------|-------------------------------------------------------------------------------|
+| 0       | done     | Scaffold, configs, workflow skeleton                                          |
+| 1       | done     | HN + Reddit + GitHub sources, Claude classifier, post drafter, Discord output |
+| 1b      | done     | SQLite persistence + Actions cache state + 90-day artifacts                   |
+| 1c      | done     | Cosine prefilter (Gemini embeddings) between keyword and LLM                  |
+| 3a      | done     | Source expansion (12 subreddits, 21 HN queries, X via Playwright cookies)     |
+| 3b      | done     | HF Papers + Newsletters RSS sources                                           |
+| D1      | done     | Distribution: dispatch-approved cron, Buffer X posting, Discord reaction poll |
+| D2      | done     | Weekly synthesis cron (Sundays) + Beehiiv draft publish                       |
+| D3      | done     | `posts` table for outgoing-post tracking + status lifecycle                   |
+| 2       | future   | `people` + `signal_people` tables + weekly person snapshots                   |
+| 4-7     | deferred | Cloudflare D1 + Pages dashboard + Access auth (see `40-distribution-stack`)   |
+| 8       | future   | Engagement feedback loop (blocked by X API 402; revisit via Buffer analytics) |
+
+## Auxiliary entry points
+
+| Console script      | Trigger                            | What                                            |
+|---------------------|------------------------------------|-------------------------------------------------|
+| `routr-signal`      | `daily-signals.yml` (07:00 UTC)    | Daily fetch → classify → publish to Discord     |
+| `routr-synthesize`  | `weekly-synthesis.yml` (Sun 14:00) | Aggregate week → draft essay → post to Discord  |
+| `routr-dispatch`    | `dispatch-approved.yml` (every 15) | Poll reactions → post via Buffer / Beehiiv      |

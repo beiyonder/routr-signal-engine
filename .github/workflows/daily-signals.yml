@@ -76,7 +76,7 @@ jobs:
           if [ -n "${INPUT_SOURCES}" ]; then
             echo "sources=${INPUT_SOURCES}" >> $GITHUB_OUTPUT
           else
-            echo "sources=hn,reddit,github_issues,twitter,discord_paste" >> $GITHUB_OUTPUT
+            echo "sources=hn,reddit,github_issues,twitter,discord_paste,hf_papers,newsletters" >> $GITHUB_OUTPUT
           fi
 
       - name: Run pipeline

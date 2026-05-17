@@ -66,14 +66,17 @@ The system prompts emit strict JSON, so switching providers should not require p
 
 Each run produces:
 
-- `data/digests/YYYY-MM-DD.md` — human-readable digest, committed to the repo
-- `data/raw/<source>/YYYY-MM-DD.json` — raw fetched items per source (audit trail)
-- `data/raw/digest-YYYY-MM-DD.json` — machine-readable digest snapshot
-- `data/seen/<source>.json` — per-source dedupe state (committed)
-- `data/leads/queue.jsonl` — append-only outbound queue (committed)
-- Slack post to `$SLACK_WEBHOOK_URL`
-- Discord post to `$DISCORD_WEBHOOK_URL` (use the `/slack` endpoint suffix)
-- Email to `$EMAIL_TO` via `$EMAIL_SMTP_HOST`
+- `data/intel.db` — SQLite with the canonical `signals`, `runs`, `posts` tables
+  (gitignored locally; travels between CI runs via Actions cache).
+- `data/digests/YYYY-MM-DD.md` — human-readable digest snapshot (gitignored;
+  also archived via Actions artifacts, 90-day retention).
+- Discord post to `$DISCORD_WEBHOOK_URL` (native embed format, NOT `/slack`).
+  The webhook is hit with `?wait=true` so we get the message IDs back; those
+  IDs live on the `runs.discord_message_ids` column so the dispatch worker
+  can poll them for approval reactions.
+- One `posts` row per auto-dispatchable hook (today: `x_thread`), `status='pending'`.
+- Optional: Slack post to `$SLACK_WEBHOOK_URL` and email to `$EMAIL_TO` (off by
+  default in CI).
 
 ## Daily digest structure
 
@@ -135,15 +138,49 @@ LLM provider/model are best stored as **repo Variables** (visible in run logs, e
 | Secret  | `TWITTER_PASSWORD`            | want X source              | Burner X password                                      |
 | Secret  | `TWITTER_TOTP_SECRET`         | optional                   | TOTP secret if 2FA is enabled on the burner            |
 | Secret  | `TWITTER_COOKIES_B64`         | want X Playwright fallback | base64 of `data/cache/twitter-cookies.json`            |
+| Secret  | `DISCORD_BOT_TOKEN`           | want dispatch worker       | Bot token for reading reactions via REST               |
+| Secret  | `DISCORD_APP_ID`              | want dispatch worker       | Discord application id                                 |
+| Secret  | `DISCORD_PUBLIC_KEY`          | future interactions URL    | Used for signature verification if we add buttons      |
+| Secret  | `DISCORD_CHANNEL_ID`          | want dispatch worker       | Channel id where the digest is posted (REST polling)   |
+| Secret  | `BUFFER_ACCESS_TOKEN`         | want X auto-posting        | Buffer GraphQL bearer                                  |
+| Secret  | `BUFFER_ORG_ID`               | want X auto-posting        | Buffer organization id                                 |
+| Secret  | `BUFFER_X_CHANNEL_ID`         | want X auto-posting        | Buffer channel id for the connected X profile          |
+| Secret  | `BEEHIIV_API_KEY`             | want newsletter publish    | Beehiiv v2 API key                                     |
+| Secret  | `BEEHIIV_PUBLICATION_ID`      | want newsletter publish    | `pub_<uuid>` for the target publication                |
+| Secret  | `X_API_BEARER_TOKEN`          | optional / future          | Reserved for direct X read endpoints (currently 402)   |
+| Secret  | `X_API_CONSUMER_KEY`          | optional / future          | Reserved for direct X user-context posting if needed   |
+| Secret  | `X_API_CONSUMER_SECRET`       | optional / future          | Reserved for direct X user-context posting if needed   |
 
 `GITHUB_TOKEN` is provided automatically by Actions — we use it to authenticate GitHub API
 calls (1,000 req/hr/repo vs 60 unauthenticated).
 
-## Triggering the workflow
+## Triggering the workflows
 
-- **Scheduled:** every day at 07:00 UTC.
-- **Manual:** GitHub → Actions → `daily-signals` → "Run workflow". You can flip `dry_run`
-  to true to skip publish + commit, and override `sources` to test a subset.
+Three workflows run on different schedules:
+
+| Workflow                  | Schedule (UTC)                         | Console script      | What                                                   |
+|---------------------------|----------------------------------------|---------------------|--------------------------------------------------------|
+| `daily-signals.yml`       | 07:00 daily                            | `routr-signal`      | Fetch → classify → publish to Discord                  |
+| `weekly-synthesis.yml`    | Sun 14:00                              | `routr-synthesize`  | 7-day aggregate → essay draft → post to Discord        |
+| `dispatch-approved.yml`   | every 15 min on :15/:30/:45            | `routr-dispatch`    | Poll Discord reactions → post via Buffer / Beehiiv     |
+
+Each accepts `workflow_dispatch` for manual runs. `daily-signals.yml` also
+takes `dry_run` (skip publish) and `sources` (subset override) inputs.
+
+## Distribution flow (cross-channel publishing)
+
+After a daily digest lands in Discord, the dispatch worker (running every 15
+min) watches for approval reactions on the digest's messages:
+
+| Emoji | Triggers                                                                       |
+|-------|--------------------------------------------------------------------------------|
+| ✅    | Post the `x_thread` hook to X via Buffer.                                       |
+| 📰    | Push the synthesis draft to Beehiiv as a newsletter draft (review + send in UI).|
+| 🚀    | (Bot adds this after a successful dispatch — visible "done" marker.)            |
+| ❌    | (Bot adds this on a failed dispatch — visible "needs attention" marker.)        |
+
+LinkedIn is **intentionally not auto-wired**: copy the LinkedIn hook from the
+digest and post it yourself.
 
 ## Tuning
 
@@ -228,8 +265,10 @@ commit step skips with "No data/ changes to commit." Not a bug.
 | Hacker News      | `sources/hn.py`                           | none (Algolia public API)           | ~20 items / run   |
 | Reddit           | `sources/reddit.py`                       | anonymous Android OAuth fallback    | ~90 items / run   |
 | GitHub issues    | `sources/github_issues.py`                | `GITHUB_TOKEN` (optional)           | ~15 items / run   |
-| X / Twitter      | `sources/twitter.py`                      | twikit primary, Playwright fallback | ~50 items / run   |
+| X / Twitter      | `sources/twitter.py`                      | Playwright + imported cookies       | ~80 items / run   |
 | Discord paste-in | `sources/discord_paste.py`                | manual — drop `.md` files locally   | as you paste them |
+| HF Papers        | `sources/hf_papers.py`                    | none (huggingface.co/api endpoint)  | ~30 items / run   |
+| Newsletters      | `sources/newsletters.py`                  | none (RSS bundle)                   | ~50 items / run   |
 
 ### Discord paste-in (Latent Space and others)
 

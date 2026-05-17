@@ -1,0 +1,40 @@
+# Curated newsletter RSS sources.
+#
+# These are author-edited, high-density signals. The cosine prefilter usually
+# keeps the bulk of each feed (low noise floor compared to social platforms),
+# but the keyword prefilter still trims off-topic items (sports issues etc.).
+#
+# Each feed is identified by `name`; the dedupe id is "newsletter-<sha1(url)>".
+
+feeds:
+  - name: latent-space
+    url: https://www.latent.space/feed
+    max_items_per_run: 10
+
+  - name: the-batch
+    url: https://www.deeplearning.ai/the-batch/feed/
+    max_items_per_run: 10
+
+  - name: import-ai
+    url: https://jack-clark.net/feed/
+    max_items_per_run: 10
+
+  - name: ahead-of-ai
+    url: https://magazine.sebastianraschka.com/feed
+    max_items_per_run: 8
+
+  - name: lastweek-in-ai
+    url: https://lastweekin.ai/feed
+    max_items_per_run: 8
+
+  - name: simon-willison
+    url: https://simonwillison.net/atom/everything/
+    max_items_per_run: 12
+
+  - name: hamel-husain
+    url: https://hamel.dev/blog/blog.xml
+    max_items_per_run: 6
+
+# Per-request throttle and UA shared across feeds.
+min_seconds_between_requests: 2.0
+user_agent: "routr-signal-engine/0.1 (+https://github.com/beiyonder/routr-signal-engine)"

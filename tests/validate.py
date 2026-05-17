@@ -586,6 +586,167 @@ def check_idempotence_live() -> None:
 # Main
 # -----------------------------------------------------------------------------
 
+def check_distribution_modules() -> None:
+    """Smoke-check the distribution stack modules import + have the expected surface."""
+
+    section("[9] distribution stack: imports + surface")
+
+    # Buffer
+    from routr_signal.lib import buffer_client
+    check("buffer_client exports CreatedPost", hasattr(buffer_client, "CreatedPost"))
+    check("buffer_client exports create_post", callable(getattr(buffer_client, "create_post", None)))
+    check("buffer_client exports list_channels", callable(getattr(buffer_client, "list_channels", None)))
+    check("buffer_client exports account", callable(getattr(buffer_client, "account", None)))
+    check(
+        "buffer_client.VALID_SHARE_MODES includes shareNow + addToQueue",
+        "shareNow" in buffer_client.VALID_SHARE_MODES and "addToQueue" in buffer_client.VALID_SHARE_MODES,
+    )
+
+    # Beehiiv
+    from routr_signal.lib import beehiiv_client
+    check(
+        "beehiiv_client exports create_draft_post",
+        callable(getattr(beehiiv_client, "create_draft_post", None)),
+    )
+
+    # Discord inbox
+    from routr_signal.lib import discord_inbox
+    check(
+        "discord_inbox exports get_message + message_has_reaction + add_bot_reaction",
+        all(
+            callable(getattr(discord_inbox, n, None))
+            for n in ("get_message", "message_has_reaction", "add_bot_reaction")
+        ),
+    )
+
+    # Synthesize
+    from routr_signal.classify import synthesize
+    check(
+        "synthesize exports SynthesisResult + synthesize",
+        hasattr(synthesize, "SynthesisResult") and callable(getattr(synthesize, "synthesize", None)),
+    )
+
+    # Tasks: weekly_synthesis + dispatch_approved CLI hooks
+    from routr_signal.tasks import dispatch_approved, weekly_synthesis
+    check(
+        "weekly_synthesis exports cli + run",
+        all(callable(getattr(weekly_synthesis, n, None)) for n in ("cli", "run")),
+    )
+    check(
+        "dispatch_approved exports cli + run + expected emoji constants",
+        all(callable(getattr(dispatch_approved, n, None)) for n in ("cli", "run"))
+        and dispatch_approved.HOOK_APPROVAL_EMOJI == "\u2705"
+        and dispatch_approved.SYNTHESIS_APPROVAL_EMOJI == "\U0001F4F0"
+        and dispatch_approved.BOT_PROCESSED_MARKER == "\U0001F680",
+    )
+
+    # _parse_message_ids handles all input shapes
+    parse = dispatch_approved._parse_message_ids
+    check("_parse_message_ids handles None", parse(None) == [])
+    check("_parse_message_ids handles empty string", parse("") == [])
+    check("_parse_message_ids handles list", parse(["a", "b"]) == ["a", "b"])
+    check("_parse_message_ids handles JSON string", parse('["x","y"]') == ["x", "y"])
+    check("_parse_message_ids handles bad JSON", parse("not json") == [])
+    check("_parse_message_ids filters non-strings", parse(["a", 1, None, "b"]) == ["a", "b"])
+
+
+def check_posts_table() -> None:
+    """Round-trip the posts table via signal_store helpers."""
+
+    section("[10] posts table + signal_store helpers")
+
+    import json as _json
+    import uuid as _uuid
+    from routr_signal.lib import db as _db
+    from routr_signal.lib import signal_store as _ss
+
+    conn = _db.get_db()
+
+    # Ensure the new columns are present after migration.
+    runs_cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    check("runs has 'kind' column", "kind" in runs_cols)
+    check("runs has 'discord_message_ids' column", "discord_message_ids" in runs_cols)
+    posts_cols = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
+    expected_cols = {
+        "id", "kind", "signal_id", "run_id", "hook_format", "platform", "text",
+        "discord_message_id", "discord_reaction", "buffer_post_id", "beehiiv_post_id",
+        "external_url", "status", "error", "created_at", "approved_at", "posted_at",
+        "metadata",
+    }
+    check(
+        "posts has all expected columns",
+        expected_cols.issubset(posts_cols),
+        f"missing: {sorted(expected_cols - posts_cols)}" if not expected_cols.issubset(posts_cols) else "",
+    )
+
+    # Use a one-off run id so we don't pollute real data.
+    run_id = f"_validate-{_uuid.uuid4().hex[:8]}"
+    _ss.open_run(run_id, kind="daily")
+
+    # record_run_discord_messages + runs_with_pending_messages
+    _ss.record_run_discord_messages(run_id, ["msg-A", "msg-B"])
+    pending = _ss.runs_with_pending_messages(limit=10)
+    found = any(r["id"] == run_id for r in pending)
+    check("runs_with_pending_messages includes our run", found)
+
+    # insert_post + pending_posts_for_run
+    post_id = f"_test-post-{_uuid.uuid4().hex[:8]}"
+    _ss.insert_post(
+        post_id=post_id,
+        kind="hook",
+        platform="x",
+        text="test hook text",
+        status="pending",
+        run_id=run_id,
+        hook_format="x_thread",
+        discord_message_id="msg-B",
+        metadata={"approval_emoji": "\u2705"},
+    )
+    pending_posts = _ss.pending_posts_for_run(run_id)
+    check("pending_posts_for_run returns our inserted post", any(p["id"] == post_id for p in pending_posts))
+
+    # update_post_status: pending -> posted
+    _ss.update_post_status(
+        post_id,
+        status="posted",
+        buffer_post_id="buffer-xxx",
+        discord_reaction="\u2705",
+        approved=True,
+        posted=True,
+    )
+    row = _ss.get_post(post_id)
+    check("update_post_status promotes pending->posted", row is not None and row["status"] == "posted")
+    check("update_post_status records buffer_post_id", row is not None and row["buffer_post_id"] == "buffer-xxx")
+    check(
+        "update_post_status sets approved_at + posted_at",
+        row is not None and row["approved_at"] is not None and row["posted_at"] is not None,
+    )
+
+    # Cleanup
+    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+    conn.commit()
+
+
+def check_new_sources_register() -> None:
+    """The new sources/hf_papers and sources/newsletters should be in the registry."""
+
+    section("[11] new sources registered in main pipeline")
+
+    from routr_signal.main import DEFAULT_SOURCES, SOURCE_REGISTRY
+    check("SOURCE_REGISTRY includes hf_papers", "hf_papers" in SOURCE_REGISTRY)
+    check("SOURCE_REGISTRY includes newsletters", "newsletters" in SOURCE_REGISTRY)
+    check("DEFAULT_SOURCES includes hf_papers", "hf_papers" in DEFAULT_SOURCES)
+    check("DEFAULT_SOURCES includes newsletters", "newsletters" in DEFAULT_SOURCES)
+
+    # hf_papers + newsletters source modules are import-safe and have a fetch() callable.
+    from routr_signal.sources import hf_papers, newsletters
+    check("hf_papers.fetch is callable", callable(hf_papers.fetch))
+    check("newsletters.fetch is callable", callable(newsletters.fetch))
+    check("hf_papers SOURCE == 'hf'", hf_papers.SOURCE == "hf")
+    check("newsletters SOURCE == 'newsletter'", newsletters.SOURCE == "newsletter")
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -601,6 +762,9 @@ def main() -> int:
     check_lead_extractor()
     check_pain_signal_fallback()
     check_discord_payload()
+    check_distribution_modules()
+    check_posts_table()
+    check_new_sources_register()
 
     # ----- Live idempotence ------
     try:
@@ -609,7 +773,7 @@ def main() -> int:
         check("idempotence check executed without crash", False, str(e))
 
     # ----- LLM variance (informational) ------
-    section("[8] LLM classifier variance across iterations (informational)")
+    section("[12] LLM classifier variance across iterations (informational)")
     items = fixture_raw_items()
     print("  Using 5-item fixture (item 4 should be suppressed pre-LLM).")
     items_after_prefilter = prefilter(items)

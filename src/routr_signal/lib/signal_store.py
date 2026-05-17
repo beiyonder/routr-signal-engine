@@ -211,10 +211,13 @@ def recent_signals(limit: int = 200) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def open_run(run_id: str) -> None:
+def open_run(run_id: str, *, kind: str = "daily") -> None:
+    """Insert (or reset) a `runs` row. `kind` is `daily` for the main pipeline
+    and `synthesis` for the weekly synthesis cron."""
+
     get_db().execute(
-        "INSERT OR REPLACE INTO runs (id, started_at) VALUES (?, ?)",
-        (run_id, _utcnow_iso()),
+        "INSERT OR REPLACE INTO runs (id, started_at, kind) VALUES (?, ?, ?)",
+        (run_id, _utcnow_iso(), kind),
     )
     get_db().commit()
 
@@ -267,3 +270,169 @@ def recent_runs(limit: int = 50) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+
+# ---------------------------------------------------------------------------
+# Discord message tracking (per-run)
+# ---------------------------------------------------------------------------
+
+
+def record_run_discord_messages(run_id: str, message_ids: list[str]) -> None:
+    """Save the Discord message IDs that contained this run's digest so the
+    dispatch worker can later check them for reactions.
+
+    Stored as a JSON array on the runs row; idempotent overwrite by run_id.
+    """
+
+    get_db().execute(
+        "UPDATE runs SET discord_message_ids = ? WHERE id = ?",
+        (json.dumps(list(message_ids), ensure_ascii=False), run_id),
+    )
+    get_db().commit()
+
+
+def runs_with_pending_messages(
+    *,
+    kind: str | None = None,
+    since_iso: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return recent runs that have at least one Discord message id recorded.
+
+    Used by the dispatch worker to know which messages to poll for reactions.
+    `since_iso` is an inclusive lower bound on `started_at`.
+    """
+
+    sql = (
+        "SELECT * FROM runs "
+        "WHERE discord_message_ids IS NOT NULL "
+        "  AND discord_message_ids != '[]' "
+        "  AND discord_message_ids != '' "
+    )
+    params: list[Any] = []
+    if kind is not None:
+        sql += " AND kind = ?"
+        params.append(kind)
+    if since_iso is not None:
+        sql += " AND started_at >= ?"
+        params.append(since_iso)
+    sql += " ORDER BY started_at DESC LIMIT ?"
+    params.append(limit)
+    rows = get_db().execute(sql, tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Posts table: outgoing cross-channel publishes
+# ---------------------------------------------------------------------------
+
+
+def insert_post(
+    *,
+    post_id: str,
+    kind: str,
+    platform: str,
+    text: str,
+    status: str = "pending",
+    signal_id: str | None = None,
+    run_id: str | None = None,
+    hook_format: str | None = None,
+    discord_message_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Create a new posts row. Idempotent on post_id via INSERT OR IGNORE."""
+
+    get_db().execute(
+        """
+        INSERT OR IGNORE INTO posts (
+            id, kind, signal_id, run_id, hook_format, platform, text,
+            discord_message_id, status, created_at, metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            post_id,
+            kind,
+            signal_id,
+            run_id,
+            hook_format,
+            platform,
+            text,
+            discord_message_id,
+            status,
+            _utcnow_iso(),
+            json.dumps(metadata or {}, ensure_ascii=False),
+        ),
+    )
+    get_db().commit()
+
+
+def update_post_status(
+    post_id: str,
+    *,
+    status: str,
+    error: str | None = None,
+    buffer_post_id: str | None = None,
+    beehiiv_post_id: str | None = None,
+    external_url: str | None = None,
+    discord_reaction: str | None = None,
+    approved: bool = False,
+    posted: bool = False,
+) -> None:
+    """Promote a post through its status lifecycle. Each field updates only
+    when explicitly provided; existing values are preserved otherwise."""
+
+    now = _utcnow_iso()
+    get_db().execute(
+        """
+        UPDATE posts
+           SET status              = ?,
+               error               = COALESCE(?, error),
+               buffer_post_id      = COALESCE(?, buffer_post_id),
+               beehiiv_post_id     = COALESCE(?, beehiiv_post_id),
+               external_url        = COALESCE(?, external_url),
+               discord_reaction    = COALESCE(?, discord_reaction),
+               approved_at         = CASE WHEN ? THEN ? ELSE approved_at END,
+               posted_at           = CASE WHEN ? THEN ? ELSE posted_at END
+         WHERE id = ?
+        """,
+        (
+            status,
+            error,
+            buffer_post_id,
+            beehiiv_post_id,
+            external_url,
+            discord_reaction,
+            1 if approved else 0,
+            now,
+            1 if posted else 0,
+            now,
+            post_id,
+        ),
+    )
+    get_db().commit()
+
+
+def pending_posts_for_run(run_id: str) -> list[dict[str, Any]]:
+    """All `pending` posts attached to a run (typically created when the
+    digest publishes). Used by dispatch worker to find what to post once a
+    reaction shows up."""
+
+    rows = get_db().execute(
+        "SELECT * FROM posts WHERE run_id = ? AND status = 'pending' ORDER BY created_at ASC",
+        (run_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def posts_by_status(status: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    rows = get_db().execute(
+        "SELECT * FROM posts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+        (status, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_post(post_id: str) -> dict[str, Any] | None:
+    row = get_db().execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    return dict(row) if row else None

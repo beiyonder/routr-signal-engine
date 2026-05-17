@@ -1,0 +1,69 @@
+name: dispatch-approved
+
+on:
+  # Poll for approval reactions on recent digest / synthesis messages.
+  # Skip :00 to avoid cache-write collisions with daily-signals which runs at 07:00 UTC.
+  schedule:
+    - cron: "15,30,45 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dispatch-approved
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore pipeline state (intel.db produced by daily-signals + weekly-synthesis)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+          key: pipeline-state-${{ github.run_id }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Run dispatch worker
+        env:
+          DISCORD_BOT_TOKEN:           ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID:          ${{ secrets.DISCORD_CHANNEL_ID }}
+          BUFFER_ACCESS_TOKEN:         ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_ORG_ID:               ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_X_CHANNEL_ID:         ${{ secrets.BUFFER_X_CHANNEL_ID }}
+          BEEHIIV_API_KEY:             ${{ secrets.BEEHIIV_API_KEY }}
+          BEEHIIV_PUBLICATION_ID:      ${{ secrets.BEEHIIV_PUBLICATION_ID }}
+        run: routr-dispatch
+
+      - name: Save state (we wrote post status updates back to intel.db)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+          key: pipeline-state-${{ github.run_id }}
