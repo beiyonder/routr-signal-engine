@@ -34,11 +34,18 @@ from ..lib.logging import error, info, warn
 
 
 # Emoji conventions
-# Either of these on a daily digest message approves the auto-postable hook
-# (currently x_thread only) for posting to X via Buffer. ✅ is the explicit
-# convention; 👍 is allowed because it's the universal "approve" gesture and
-# nothing else competes for that meaning in this channel.
-HOOK_APPROVAL_EMOJIS: tuple[str, ...] = ("✅", "👍")
+#
+# 📤 (outbox tray) is the EXPLICIT ship trigger for daily-digest hooks. It
+# requires deliberate intent: the user has to pick this specific emoji from
+# the reaction picker (it's not in the default quick-react row), which acts
+# as the friction we want. Casual ✅ or 👍 reactions do NOT ship anything;
+# they're soft acknowledgments the user can leave on a digest without fear.
+#
+# Rationale: earlier we used ✅ / 👍 as the ship trigger and ended up
+# shipping thread-opener cliffhangers as standalone tweets. The pipeline
+# was conflating "I read this" with "this is finished and I want it live".
+# Forcing 📤 separates the two.
+HOOK_APPROVAL_EMOJIS: tuple[str, ...] = ("📤",)
 HOOK_APPROVAL_EMOJI = HOOK_APPROVAL_EMOJIS[0]   # back-compat alias for tests / docs
 
 SYNTHESIS_APPROVAL_EMOJI = "📰"      # user reacts: send synthesis to Beehiiv as draft

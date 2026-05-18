@@ -133,8 +133,15 @@ def _build_messages(digest: Digest) -> list[dict[str, Any]]:
 
     msg1_content = _header_content(digest)
 
+    # Build a signal_id -> url lookup so each hook can render its source
+    # link without re-fetching from the DB. We only need URLs for signals
+    # that any hook anchors to, but it's cheap to include all top signals.
+    signal_urls: dict[str, str] = {
+        c.raw.id: c.raw.url for c in digest.pain_signals if c.raw.url
+    }
+
     signal_embeds = [_signal_embed(i, c) for i, c in enumerate(digest.pain_signals, start=1)]
-    hooks_embed = _hooks_embed(digest.hooks) if digest.hooks else None
+    hooks_embed = _hooks_embed(digest.hooks, signal_urls=signal_urls) if digest.hooks else None
     leads_embed = _leads_embed(digest.active_accounts) if digest.active_accounts else None
     notes_embed = _notes_embed(digest) if digest.notes else None
 
@@ -194,6 +201,12 @@ def _header_content(digest: Digest) -> str:
     if digest.source_counts:
         bits = " · ".join(f"{k} {v}" for k, v in digest.source_counts.items())
         parts.append(f"Source counts: {bits}")
+    # Make the ship-trigger explicit on every digest so there's no ambiguity
+    # about which reaction actually posts to X. Casual ✅ / 👍 do nothing.
+    parts.append(
+        "_React 📤 on this message to ship the x_thread draft to X via Buffer. "
+        "✅ / 👍 are acknowledgments only; they do not post._"
+    )
     return "\n".join(parts)
 
 
@@ -260,15 +273,44 @@ def _signal_embed(idx: int, c: ClassifiedItem) -> dict[str, Any]:
     return embed
 
 
-def _hooks_embed(hooks: list[PostHook]) -> dict[str, Any]:
+def _hooks_embed(
+    hooks: list[PostHook],
+    signal_urls: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Render the 5 drafted hooks. When a hook has an anchor_signal_id, we
+    show a clickable link to the source in the field value so the user can
+    one-click verify the draft against the actual signal.
+
+    `signal_urls` maps signal_id -> url. Pass the digest's pain_signal URLs
+    so the lookup is O(1) in the field-by-field render loop.
+    """
+
     fields: list[dict[str, Any]] = []
     for hook in hooks[:5]:
         label = HOOK_LABELS.get(hook.format, hook.format)
-        anchor = f" · anchor `{hook.anchor_signal_id}`" if hook.anchor_signal_id else ""
+        anchor = hook.anchor_signal_id or ""
+        name = f"✍️ {label}"
+        if anchor:
+            name += f" · anchor {anchor}"
+        # The text is what would be shipped. We put it in a blockquote so it
+        # visually separates from the source link below it.
+        body_lines: list[str] = []
+        body_lines.append(f"> {hook.text}")
+        if anchor and signal_urls and anchor in signal_urls:
+            url = signal_urls[anchor]
+            body_lines.append("")
+            body_lines.append(f"[source]({url})")
+        elif anchor and not (signal_urls and anchor in signal_urls):
+            # We know there's an anchor but couldn't resolve its URL.
+            # Surface that so the user knows the link is missing rather
+            # than thinking we forgot to include it.
+            body_lines.append("")
+            body_lines.append(f"_(source url not found for `{anchor}`)_")
+        value = "\n".join(body_lines)
         fields.append(
             {
-                "name": _truncate(f"✍️ {label}{anchor}", MAX_FIELD_NAME),
-                "value": _truncate(hook.text, MAX_FIELD_VALUE),
+                "name": _truncate(name, MAX_FIELD_NAME),
+                "value": _truncate(value, MAX_FIELD_VALUE),
                 "inline": False,
             }
         )

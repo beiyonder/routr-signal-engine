@@ -206,6 +206,48 @@ def recent_signals(limit: int = 200) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+
+def topic_frequency(window_days: int = 7) -> dict[str, int]:
+    """Count how many times each LLM-assigned topic has appeared in the last
+    `window_days` of CLASSIFIED signals. Used by the drafter to avoid
+    re-covering angles already saturated in recent runs, and surfaced in
+    the digest footer so the operator can see the weekly distribution.
+
+    Only signals where `llm_relevant = 1` count (irrelevant ones don't shape
+    the conversation we'd be drafting against).
+    """
+
+    from collections import Counter as _Counter
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    rows = get_db().execute(
+        """
+        SELECT llm_topics FROM signals
+         WHERE llm_relevant = 1
+           AND classified_at IS NOT NULL
+           AND classified_at >= ?
+        """,
+        (cutoff_iso,),
+    ).fetchall()
+
+    counter: _Counter[str] = _Counter()
+    for r in rows:
+        raw = r[0] or "[]"
+        try:
+            topics = json.loads(raw)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(topics, list):
+            continue
+        for t in topics:
+            if isinstance(t, str) and t:
+                counter[t] += 1
+
+    # Return as a plain dict ordered by frequency desc, top 20.
+    return dict(counter.most_common(20))
+
+
 # ---------------------------------------------------------------------------
 # Runs
 # ---------------------------------------------------------------------------

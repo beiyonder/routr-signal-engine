@@ -632,12 +632,23 @@ def check_distribution_modules() -> None:
         "weekly_synthesis exports cli + run",
         all(callable(getattr(weekly_synthesis, n, None)) for n in ("cli", "run")),
     )
+    # Dispatch: 📤 is the deliberate ship trigger (was ✅ / 👍 before 2026-05-18).
+    # The change forces deliberation; casual reactions no longer ship.
     check(
-        "dispatch_approved exports cli + run + expected emoji constants",
-        all(callable(getattr(dispatch_approved, n, None)) for n in ("cli", "run"))
-        and dispatch_approved.HOOK_APPROVAL_EMOJI == "\u2705"
-        and dispatch_approved.SYNTHESIS_APPROVAL_EMOJI == "\U0001F4F0"
-        and dispatch_approved.BOT_PROCESSED_MARKER == "\U0001F680",
+        "dispatch_approved exports cli + run",
+        all(callable(getattr(dispatch_approved, n, None)) for n in ("cli", "run")),
+    )
+    check(
+        "dispatch_approved.HOOK_APPROVAL_EMOJIS contains only the outbox emoji 📤",
+        dispatch_approved.HOOK_APPROVAL_EMOJIS == ("\U0001F4E4",),
+    )
+    check(
+        "dispatch_approved.SYNTHESIS_APPROVAL_EMOJI is newspaper 📰",
+        dispatch_approved.SYNTHESIS_APPROVAL_EMOJI == "\U0001F4F0",
+    )
+    check(
+        "dispatch_approved.BOT_PROCESSED_MARKER is rocket 🚀",
+        dispatch_approved.BOT_PROCESSED_MARKER == "\U0001F680",
     )
 
     # _parse_message_ids handles all input shapes
@@ -747,6 +758,119 @@ def check_new_sources_register() -> None:
     check("newsletters SOURCE == 'newsletter'", newsletters.SOURCE == "newsletter")
 
 
+
+def check_topic_frequency() -> None:
+    """signal_store.topic_frequency aggregates llm_topics across recent classified signals."""
+
+    section("[12] topic frequency helper")
+
+    import json as _json
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from routr_signal.lib import db as _db
+    from routr_signal.lib import signal_store as _ss
+
+    conn = _db.get_db()
+
+    # Seed three throwaway signals with distinct topic distributions.
+    src = "_validate_freq"
+    conn.execute("DELETE FROM signals WHERE source = ?", (src,))
+    conn.commit()
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (f"_freq-{_uuid.uuid4().hex[:6]}", "mcp"),
+        (f"_freq-{_uuid.uuid4().hex[:6]}", "mcp"),
+        (f"_freq-{_uuid.uuid4().hex[:6]}", "cold_start"),
+    ]
+    for sid, topic in rows:
+        conn.execute(
+            """
+            INSERT INTO signals (id, source, title, url, created_at, fetched_at,
+                                 raw_extra, llm_relevant, llm_topics, classified_at)
+            VALUES (?, ?, 't', 'http://x', ?, ?, '{}', 1, ?, ?)
+            """,
+            (sid, src, now_iso, now_iso, _json.dumps([topic]), now_iso),
+        )
+    conn.commit()
+
+    freq = _ss.topic_frequency(window_days=7)
+    check("topic_frequency returns mcp ≥ 2", freq.get("mcp", 0) >= 2)
+    check("topic_frequency returns cold_start ≥ 1", freq.get("cold_start", 0) >= 1)
+    check(
+        "topic_frequency is sorted by count desc (mcp before cold_start in iteration)",
+        list(freq.keys()).index("mcp") < list(freq.keys()).index("cold_start"),
+    )
+
+    # cleanup
+    conn.execute("DELETE FROM signals WHERE source = ?", (src,))
+    conn.commit()
+
+
+def check_hook_source_link() -> None:
+    """The Discord hooks_embed renders a clickable source link when a hook
+    anchors to a known signal."""
+
+    section("[13] hook source link in digest")
+
+    from datetime import datetime, timezone
+
+    from routr_signal.output import discord as discord_out
+
+    now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+    signals = [
+        ClassifiedItem(
+            raw=RawItem(
+                id="hn-source-test",
+                source="hn",
+                title="t",
+                body="b",
+                url="https://news.ycombinator.com/item?id=999999",
+                author="u",
+                created_at=now,
+            ),
+            relevant=True,
+            score=0.8,
+            wedge="cold_start",
+            pain_summary="p",
+            suggested_angle="a",
+            lead_handle="u",
+            lead_platform="hn",
+        )
+    ]
+    hooks = [PostHook(format="x_thread", anchor_signal_id="hn-source-test", text="standalone post")]
+    digest = Digest(
+        date="2026-05-13",
+        pain_signals=signals,
+        active_accounts=[],
+        hooks=hooks,
+        source_counts={"hn": 1},
+        notes=[],
+    )
+
+    messages = discord_out._build_messages(digest)
+    # Find the hooks embed in any message; locate the hook field; check its value
+    found_link = False
+    for msg in messages:
+        for emb in msg.get("embeds") or []:
+            if emb.get("title") == "Pre-drafted post hooks":
+                for f in emb.get("fields") or []:
+                    val = f.get("value") or ""
+                    if "https://news.ycombinator.com/item?id=999999" in val:
+                        found_link = True
+                        break
+    check("hooks_embed includes the anchored signal's source URL", found_link)
+
+    # Markdown digest should also embed the link
+    from routr_signal.output import markdown_digest as md
+    rendered = md.render(digest)
+    check(
+        "markdown digest includes [source](url) for anchored hook",
+        "[source](https://news.ycombinator.com/item?id=999999)" in rendered,
+    )
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -765,6 +889,8 @@ def main() -> int:
     check_distribution_modules()
     check_posts_table()
     check_new_sources_register()
+    check_topic_frequency()
+    check_hook_source_link()
 
     # ----- Live idempotence ------
     try:
@@ -773,7 +899,7 @@ def main() -> int:
         check("idempotence check executed without crash", False, str(e))
 
     # ----- LLM variance (informational) ------
-    section("[12] LLM classifier variance across iterations (informational)")
+    section("[14] LLM classifier variance across iterations (informational)")
     items = fixture_raw_items()
     print("  Using 5-item fixture (item 4 should be suppressed pre-LLM).")
     items_after_prefilter = prefilter(items)

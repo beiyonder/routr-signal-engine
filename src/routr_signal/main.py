@@ -163,8 +163,18 @@ def run() -> int:
     for rank, c in enumerate(digest.pain_signals, start=1):
         signal_store.update_rank(c.raw.id, rank=rank, run_id=run_id)
 
-    # 4. Generate post hooks
-    hooks, low_signal = post_drafter.draft(digest.pain_signals)
+    # 3b. Compute weekly topic frequency. The drafter uses it to avoid
+    #     re-covering already-saturated angles; the digest footer surfaces
+    #     it so the operator can see the topic distribution at a glance.
+    topic_freq = signal_store.topic_frequency(window_days=7)
+    if topic_freq:
+        # Render compact footer: top 6 topics shown, "topic xN" pairs separated by " · ".
+        top_six = list(topic_freq.items())[:6]
+        freq_line = " · ".join(f"{t} x{n}" for t, n in top_six)
+        digest.notes.append(f"7d topic frequency (top 6): {freq_line}")
+
+    # 4. Generate post hooks (passing topic_frequency for repetition-avoidance)
+    hooks, low_signal = post_drafter.draft(digest.pain_signals, topic_frequency=topic_freq)
     if low_signal:
         digest.notes.append("low_signal_day: drafter fell back to long-running wedges")
     digest.hooks = hooks

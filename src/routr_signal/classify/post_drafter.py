@@ -17,14 +17,23 @@ SYSTEM_PROMPT_NAME = "post_drafter"
 TOP_N_SIGNALS = 12
 
 
-def draft(top_signals: list[ClassifiedItem]) -> tuple[list[PostHook], bool]:
+def draft(
+    top_signals: list[ClassifiedItem],
+    *,
+    topic_frequency: dict[str, int] | None = None,
+) -> tuple[list[PostHook], bool]:
     """Return (hooks, low_signal_day).
 
     The drafter always returns 5 hooks; on a low-signal day they're tied to the long-running
     wedges rather than to specific items.
+
+    `topic_frequency` is a map of topic -> count over the last 7 days. We pass
+    it through to the drafter so it can avoid re-covering angles that have
+    already saturated the week's conversation. See the system prompt for the
+    rule the model applies to it.
     """
 
-    payload = _render_payload(top_signals[:TOP_N_SIGNALS])
+    payload = _render_payload(top_signals[:TOP_N_SIGNALS], topic_frequency=topic_frequency)
     system = prompt(SYSTEM_PROMPT_NAME)
 
     from .client import call_json
@@ -42,8 +51,12 @@ def draft(top_signals: list[ClassifiedItem]) -> tuple[list[PostHook], bool]:
     return (hooks, low_signal)
 
 
-def _render_payload(signals: list[ClassifiedItem]) -> str:
-    payload = {
+def _render_payload(
+    signals: list[ClassifiedItem],
+    *,
+    topic_frequency: dict[str, int] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
         "todays_top_signals": [
             {
                 "id": c.raw.id,
@@ -57,13 +70,17 @@ def _render_payload(signals: list[ClassifiedItem]) -> str:
                 "suggested_angle": c.suggested_angle,
             }
             for c in signals
-        ]
+        ],
+        "topic_frequency_last_7_days": topic_frequency or {},
     }
     return (
         "Generate exactly five post hooks (x_thread, linkedin, reddit, hn_comment, devto_title) "
-        "as specified in the system prompt. Anchor each hook to one of today's signals when "
-        "possible by populating anchor_signal_id with the matching id; if none fit, leave "
-        "anchor_signal_id null and set low_signal_day true.\n\n"
+        "as specified in the system prompt. Every hook is a COMPLETE STANDALONE post; no "
+        "cliffhangers. Anchor each hook to one of today's signals when possible by populating "
+        "anchor_signal_id with the matching id; if none fit, leave anchor_signal_id null and "
+        "set low_signal_day true.\n\n"
+        "Use topic_frequency_last_7_days to avoid re-covering already-saturated angles unless "
+        "you have a new data point or contrarian read.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
 

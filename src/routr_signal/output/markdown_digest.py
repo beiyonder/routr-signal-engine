@@ -75,8 +75,13 @@ def render(digest: Digest) -> str:
     if not digest.hooks:
         parts.append("_No drafts produced today._\n")
     else:
+        # Build the signal_id -> url map once so each hook can include
+        # a clickable link to the source.
+        signal_urls: dict[str, str] = {
+            c.raw.id: c.raw.url for c in digest.pain_signals if c.raw.url
+        }
         for hook in digest.hooks:
-            parts.append(_render_hook(hook))
+            parts.append(_render_hook(hook, signal_urls=signal_urls))
 
     parts.append(
         "\n---\n"
@@ -116,10 +121,16 @@ def _render_signal(idx: int, c: ClassifiedItem) -> str:
     )
 
 
-def _render_hook(hook: PostHook) -> str:
+def _render_hook(hook: PostHook, signal_urls: dict[str, str] | None = None) -> str:
     heading = FORMAT_HEADINGS.get(hook.format, hook.format)
-    anchor = f" _(anchored to {hook.anchor_signal_id})_" if hook.anchor_signal_id else ""
-    return f"### {heading}{anchor}\n\n{hook.text}\n\n"
+    anchor = hook.anchor_signal_id
+    anchor_suffix = ""
+    source_line = ""
+    if anchor:
+        anchor_suffix = f" _(anchored to {anchor})_"
+        if signal_urls and anchor in signal_urls:
+            source_line = f"\n[source]({signal_urls[anchor]})\n"
+    return f"### {heading}{anchor_suffix}\n\n{hook.text}\n{source_line}\n"
 
 
 def _badge(source: str) -> str:
