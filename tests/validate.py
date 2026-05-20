@@ -889,8 +889,12 @@ def check_x_burst_surface() -> None:
         burst_prompt = ""
     check("config/prompts/x_burst.md exists and is readable", bool(burst_prompt))
     check(
-        "x_burst prompt explicitly names 25,000 char X Premium cap",
+        "x_burst prompt allows X Premium long-form (25,000 chars)",
         "25,000" in burst_prompt or "25000" in burst_prompt,
+    )
+    check(
+        "x_burst prompt explains the 270-char auto-ship boundary and DM routing",
+        "270" in burst_prompt and "DM" in burst_prompt,
     )
     check(
         "x_burst prompt declares natural-imperfections allowance",
@@ -917,20 +921,66 @@ def check_x_burst_surface() -> None:
         and callable(getattr(voice_lint, "lint_x_burst_all", None)),
     )
     check(
-        "voice_lint.X_BURST_LENGTH_CAP == 25,000",
+        "voice_lint.X_BURST_LENGTH_CAP == 25,000 (X Premium hard cap)",
         getattr(voice_lint, "X_BURST_LENGTH_CAP", 0) == 25_000,
     )
-
-    # Lint rule: a long post (5,000 chars) WITHOUT violations should pass.
-    long_clean = "ran a benchmark across 50,000 requests last night and the numbers were interesting. "
-    long_clean = long_clean * 30  # ~2,400 chars; well under 25k, no banned words
-    long_clean += "p99 latency dropped from 1.4 seconds to 380 milliseconds after the rewrite."
-    res = voice_lint.lint_x_burst_post(PostHook(format="x_thread", anchor_signal_id=None, text=long_clean))
     check(
-        "lint_x_burst_post accepts a 2k+ char clean post (Premium length)",
+        "voice_lint.X_BURST_AUTO_SHIP_CAP == 270 (Buffer-effective limit)",
+        getattr(voice_lint, "X_BURST_AUTO_SHIP_CAP", 0) == 270,
+    )
+
+    # A 250-char clean post should pass.
+    short_clean = (
+        "ran 50k requests through a typescript llm proxy on cloudflare workers last night. "
+        "cold-start p99 was 90ms compared to 470ms on python lambda. the runtime swap matters "
+        "more than the routing layer for serverless gateway latency."
+    )
+    res = voice_lint.lint_x_burst_post(PostHook(format="x_thread", anchor_signal_id=None, text=short_clean))
+    check(
+        f"lint_x_burst_post accepts a {len(short_clean)}-char clean post",
         not res.violations,
         f"violations: {res.violations}" if res.violations else "",
     )
+
+    # A 5,000-char clean post should ALSO pass (under the 25k hard cap).
+    long_clean = (
+        "ran a benchmark across 50000 requests last night and the numbers were interesting. "
+    ) * 50  # ~4100 chars; no banned words, no em-dash, no emoji
+    long_clean += "p99 latency dropped from 1.4 seconds to 380 milliseconds after the rewrite."
+    res = voice_lint.lint_x_burst_post(PostHook(format="x_thread", anchor_signal_id=None, text=long_clean))
+    check(
+        f"lint_x_burst_post accepts a {len(long_clean)}-char clean post (DM-routed)",
+        not res.violations,
+        f"violations: {res.violations}" if res.violations else "",
+    )
+
+    # A 30,000-char post should FAIL the 25k cap.
+    too_long = "a" * 30_000
+    res = voice_lint.lint_x_burst_post(PostHook(format="x_thread", anchor_signal_id=None, text=too_long))
+    check(
+        "lint_x_burst_post rejects a 30k-char post (over the X Premium hard cap)",
+        any("length" in v.lower() for v in res.violations),
+    )
+
+    # Discord DM surface
+    from routr_signal.lib import discord_inbox
+    check(
+        "discord_inbox exports send_dm (long-form delivery channel)",
+        callable(getattr(discord_inbox, "send_dm", None)),
+    )
+    check(
+        "discord_inbox exports _chunk_long_text helper",
+        callable(getattr(discord_inbox, "_chunk_long_text", None)),
+    )
+    # Chunking: a 5000-char input should split into 3+ chunks of <=1900 chars each.
+    chunks = discord_inbox._chunk_long_text("a" * 5000, max_chars=1900)
+    check(
+        f"_chunk_long_text splits 5000-char input into multiple chunks (got {len(chunks)})",
+        len(chunks) >= 3 and all(len(c) <= 1900 for c in chunks),
+    )
+    # Chunking: a 1000-char input should not split.
+    chunks = discord_inbox._chunk_long_text("a" * 1000, max_chars=1900)
+    check("_chunk_long_text leaves a 1000-char input as a single chunk", len(chunks) == 1)
 
     # Lint rule: terminal colon still flags (cliffhanger remains banned).
     res = voice_lint.lint_x_burst_post(

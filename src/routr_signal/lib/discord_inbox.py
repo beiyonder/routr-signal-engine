@@ -228,6 +228,194 @@ def is_configured() -> bool:
 
 
 
+# ---------------------------------------------------------------------------
+# Direct Messages (DMs to a specific user)
+# ---------------------------------------------------------------------------
+#
+# The X-burst task uses DMs to deliver long-form posts (> Buffer's 280-char
+# ceiling) that the operator copy-pastes into X by hand. Bot DMs work
+# under these conditions:
+#
+#   1. The bot must share at least one guild with the recipient.
+#   2. The recipient must have "Allow direct messages from server members"
+#      enabled for that guild (Discord default = on).
+#
+# Discord's per-message content cap is 2,000 chars. Long X posts can be
+# up to 25,000 chars, so we chunk by paragraph boundaries with a small
+# header marker (`(part X / Y)`) on each chunk so the operator can copy
+# them in order. The first chunk also carries an "envelope" describing
+# the total length and the anchor signal URL.
+#
+# Auth is the same bot token as the rest of this module; the bot needs
+# Send Messages permission in any guild it shares with the recipient
+# (which it already has from the digest channel invite).
+
+
+MAX_DM_BODY_CHARS = 1900   # leave 100 chars of headroom under Discord's 2000 cap
+DM_OPEN_ENDPOINT = f"{DISCORD_API_BASE}/users/@me/channels"
+
+
+def _open_dm_channel(user_id: str) -> str | None:
+    """Open (or fetch) the DM channel id for `user_id`. Returns None on failure."""
+
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                DM_OPEN_ENDPOINT,
+                headers={**_headers(), "Content-Type": "application/json"},
+                json={"recipient_id": user_id},
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except httpx.HTTPError as e:
+            warn(f"discord: open_dm network error: {e}")
+            return None
+
+        if resp.status_code in (200, 201):
+            try:
+                ch = resp.json()
+            except ValueError:
+                warn("discord: open_dm returned non-JSON")
+                return None
+            ch_id = ch.get("id") if isinstance(ch, dict) else None
+            return ch_id if isinstance(ch_id, str) else None
+        if resp.status_code == 429:
+            retry_after = _retry_after_seconds(resp)
+            debug(f"discord: 429 on open_dm; sleeping {retry_after:.2f}s (attempt {attempt + 1}/3)")
+            time.sleep(retry_after)
+            continue
+        warn(f"discord: open_dm HTTP {resp.status_code}: {resp.text[:200]!r}")
+        return None
+
+    warn("discord: gave up on open_dm after 3 rate-limit retries")
+    return None
+
+
+def _post_dm_message(dm_channel_id: str, content: str) -> str | None:
+    """Send one DM message. Returns the message id on success, else None."""
+
+    url = f"{DISCORD_API_BASE}/channels/{dm_channel_id}/messages"
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                url,
+                headers={**_headers(), "Content-Type": "application/json"},
+                json={"content": content},
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except httpx.HTTPError as e:
+            warn(f"discord: send_dm network error: {e}")
+            return None
+
+        if resp.status_code in (200, 201):
+            try:
+                msg = resp.json()
+            except ValueError:
+                warn("discord: send_dm returned non-JSON")
+                return None
+            mid = msg.get("id") if isinstance(msg, dict) else None
+            return mid if isinstance(mid, str) else None
+        if resp.status_code == 429:
+            retry_after = _retry_after_seconds(resp)
+            debug(f"discord: 429 on send_dm; sleeping {retry_after:.2f}s (attempt {attempt + 1}/3)")
+            time.sleep(retry_after)
+            continue
+        warn(f"discord: send_dm HTTP {resp.status_code}: {resp.text[:200]!r}")
+        return None
+
+    warn("discord: gave up on send_dm after 3 rate-limit retries")
+    return None
+
+
+def _chunk_long_text(text: str, *, max_chars: int = MAX_DM_BODY_CHARS) -> list[str]:
+    """Split `text` into chunks of at most `max_chars`, preferring paragraph
+    boundaries (\\n\\n), then line boundaries (\\n), then word boundaries.
+
+    Pure-text input; no markdown wrapping (the caller adds the code fence).
+    """
+
+    if len(text) <= max_chars:
+        return [text]
+
+    out: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            out.append(remaining)
+            break
+
+        window = remaining[:max_chars]
+        # Prefer the last paragraph break inside the window.
+        idx = window.rfind("\n\n")
+        if idx < max_chars // 2:  # too early; try a single newline
+            idx = window.rfind("\n")
+        if idx < max_chars // 2:  # too early; try a sentence-end period+space
+            idx = window.rfind(". ")
+            if idx >= 0:
+                idx += 1   # keep the period with the chunk above
+        if idx < max_chars // 2:  # too early; just break on the last space
+            idx = window.rfind(" ")
+        if idx <= 0:
+            idx = max_chars   # hard cut
+
+        out.append(remaining[:idx].rstrip())
+        remaining = remaining[idx:].lstrip()
+    return out
+
+
+def send_dm(
+    user_id: str,
+    body: str,
+    *,
+    header: str | None = None,
+    code_block: bool = True,
+) -> list[str]:
+    """DM `body` to `user_id`, chunking automatically over Discord's 2000-char
+    message cap.
+
+    `header` is sent as a leading non-code message describing the payload
+    (e.g., "Manual X post (847 chars) anchored to https://...").
+
+    `code_block=True` wraps each chunk in a triple-backtick fence so the
+    operator can copy the raw post text with Discord's built-in "copy"
+    affordance (the X-burst use case). Set False for plain text DMs.
+
+    Returns the list of message ids sent (header + chunks). Empty list on
+    total failure.
+    """
+
+    dm_channel = _open_dm_channel(user_id)
+    if not dm_channel:
+        return []
+
+    msg_ids: list[str] = []
+
+    if header:
+        # Header is plain text, no chunking expected (we keep these short).
+        head = header if len(header) <= MAX_DM_BODY_CHARS else header[:MAX_DM_BODY_CHARS - 3] + "..."
+        mid = _post_dm_message(dm_channel, head)
+        if mid:
+            msg_ids.append(mid)
+
+    # When code_block is enabled, each chunk gets wrapped in ``` fences. The
+    # raw wrapper takes 8 chars (```\n + \n```), so reduce the per-chunk
+    # body cap accordingly to stay under Discord's 2000 limit.
+    chunk_cap = MAX_DM_BODY_CHARS - 16 if code_block else MAX_DM_BODY_CHARS
+
+    chunks = _chunk_long_text(body, max_chars=chunk_cap)
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        prefix = f"(part {i} / {total})\n" if total > 1 else ""
+        payload = f"{prefix}```\n{chunk}\n```" if code_block else f"{prefix}{chunk}"
+        mid = _post_dm_message(dm_channel, payload)
+        if mid:
+            msg_ids.append(mid)
+        else:
+            warn(f"discord: send_dm chunk {i}/{total} failed; aborting remaining chunks")
+            break
+    return msg_ids
+
+
+
 def _retry_after_seconds(resp: httpx.Response) -> float:
     """Parse Discord's Retry-After (header or JSON body). Defaults to 1.0s
     when missing/unparseable."""

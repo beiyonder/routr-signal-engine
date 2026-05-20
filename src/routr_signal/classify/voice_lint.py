@@ -236,16 +236,21 @@ def summarize_violations(results: list[LintResult]) -> str | None:
 
 # ---------------------------------------------------------------------------
 # X-burst variant: same voice rules, BUT
-#   - length cap is the X Premium 25k (the daily x_thread hook stays at 280)
-#   - lowercase case rule is relaxed (the X-burst prompt allows mixed case
-#     for mid/long posts)
+#   - upper length cap is the X Premium 25,000-char hard limit. Anything
+#     above this is rejected (X won't accept it natively either).
+#   - the AUTO-SHIP cap is separately defined as 270 chars (Buffer's
+#     server-side validation enforces 280 regardless of X Premium status,
+#     observed on 2026-05-20). Posts longer than 270 but shorter than the
+#     hard cap are routed to the operator's Discord DM for manual posting
+#     instead of being shipped via Buffer. See `tasks/x_burst.py`.
 #   - URL containment is enforced (X-burst posts must not contain raw links;
-#     X penalizes link-bearing posts since 2026)
+#     X penalizes link-bearing posts since 2026).
 # Everything else (em-dash, emoji, banned phrases, AI pivots, cliffhangers)
 # is identical to the standard hook lint.
 # ---------------------------------------------------------------------------
 
-X_BURST_LENGTH_CAP = 25_000
+X_BURST_LENGTH_CAP = 25_000          # X Premium hard limit
+X_BURST_AUTO_SHIP_CAP = 270          # Buffer-shippable; anything above goes to DM
 
 
 URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
