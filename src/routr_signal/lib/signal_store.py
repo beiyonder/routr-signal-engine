@@ -206,6 +206,79 @@ def recent_signals(limit: int = 200) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def recent_classified_for_drafting(
+    *,
+    window_hours: int = 48,
+    min_score: float = 0.55,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Top relevant classified signals from the last `window_hours` UTC hours.
+
+    Powers the standalone X-burst drafter, which runs outside the daily
+    pipeline and draws from whatever signals the most recent daily run
+    classified. Returns raw row dicts (not ClassifiedItem) because the
+    consumer only needs id / title / body / url / topics / score for
+    rendering the drafter payload.
+
+    Ordered by `combined_score DESC` so the highest-quality stuff is at
+    the top; the drafter takes the first N.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    rows = get_db().execute(
+        """
+        SELECT *
+          FROM signals
+         WHERE llm_relevant = 1
+           AND classified_at IS NOT NULL
+           AND classified_at >= ?
+           AND COALESCE(combined_score, 0) >= ?
+         ORDER BY combined_score DESC
+         LIMIT ?
+        """,
+        (cutoff_iso, min_score, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def signal_ids_posted_today(
+    *,
+    kind: str = "x_burst",
+    platform: str = "x",
+) -> set[str]:
+    """Signal IDs we already drafted X-burst posts against today (UTC).
+
+    Used by the X-burst task to avoid re-anchoring to the same signal in
+    the morning run and again in the afternoon run. We key on signal_id
+    because the same signal in two different post drafts looks redundant
+    to the reader even when the text is novel.
+
+    Empty set if `kind` is unknown or no rows match.
+    """
+
+    from datetime import datetime, time, timezone
+
+    midnight_iso = datetime.combine(
+        datetime.now(timezone.utc).date(),
+        time.min,
+        tzinfo=timezone.utc,
+    ).isoformat()
+    rows = get_db().execute(
+        """
+        SELECT DISTINCT signal_id
+          FROM posts
+         WHERE kind = ?
+           AND platform = ?
+           AND signal_id IS NOT NULL
+           AND created_at >= ?
+        """,
+        (kind, platform, midnight_iso),
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
 
 def topic_frequency(window_days: int = 7) -> dict[str, int]:
     """Count how many times each LLM-assigned topic has appeared in the last

@@ -231,3 +231,73 @@ def summarize_violations(results: list[LintResult]) -> str | None:
     if not issues:
         return None
     return "drafter voice-lint flagged: " + "; ".join(issues)
+
+
+
+# ---------------------------------------------------------------------------
+# X-burst variant: same voice rules, BUT
+#   - length cap is the X Premium 25k (the daily x_thread hook stays at 280)
+#   - lowercase case rule is relaxed (the X-burst prompt allows mixed case
+#     for mid/long posts)
+#   - URL containment is enforced (X-burst posts must not contain raw links;
+#     X penalizes link-bearing posts since 2026)
+# Everything else (em-dash, emoji, banned phrases, AI pivots, cliffhangers)
+# is identical to the standard hook lint.
+# ---------------------------------------------------------------------------
+
+X_BURST_LENGTH_CAP = 25_000
+
+
+URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
+
+
+def lint_x_burst_post(hook: PostHook) -> LintResult:
+    """Lint a single X-burst PostHook (format must be 'x_thread').
+
+    Reuses every hard rule from `lint_hook` except:
+      - length cap raised to 25,000 (X Premium)
+      - lowercase case rule skipped (mid/long X posts use sentence case)
+      - terminal-colon cliffhanger STILL flagged (the burst is still
+        meant to land as a complete thought)
+      - new check: no raw http(s):// URLs in body
+    """
+
+    violations: list[str] = []
+    text = hook.text or ""
+
+    if any(ch in text for ch in EMDASH_CHARS):
+        violations.append("contains em-dash or en-dash")
+
+    if _contains_emoji(text):
+        violations.append("contains emoji")
+
+    hits = _banned_hits(text)
+    if hits:
+        violations.append(f"banned phrases: {', '.join(hits)}")
+
+    lower = text.lower()
+    for label, pattern in AI_RHETORICAL_PATTERNS:
+        if re.search(pattern, lower):
+            violations.append(f"AI rhetorical pivot: {label}")
+            break
+
+    tail = text.strip().lower()
+    for tail_phrase in CLIFFHANGER_TAILS:
+        if tail.endswith(tail_phrase):
+            violations.append(f"cliffhanger tail: {tail_phrase!r}")
+            break
+
+    if text.strip().endswith(":"):
+        violations.append("x_burst ends with colon (cliffhanger)")
+
+    if URL_PATTERN.search(text):
+        violations.append("x_burst contains a raw URL (X penalizes link posts; use a follow-up reply)")
+
+    if len(text) > X_BURST_LENGTH_CAP:
+        violations.append(f"length {len(text)} > X Premium cap {X_BURST_LENGTH_CAP}")
+
+    return LintResult(hook=hook, violations=violations)
+
+
+def lint_x_burst_all(hooks: list[PostHook]) -> list[LintResult]:
+    return [lint_x_burst_post(h) for h in hooks]

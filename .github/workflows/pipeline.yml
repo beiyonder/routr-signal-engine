@@ -1,20 +1,28 @@
 name: pipeline
 
-# One workflow file, three jobs, three cron triggers.
+# One workflow file, four jobs, four cron triggers.
 #
 # Why one file: GitHub Actions cache is scoped to the workflow file. The
-# dispatch worker MUST read the intel.db state produced by the daily and
-# synthesis jobs, so they all live here to share the `pipeline-state-*`
-# cache namespace.
+# dispatch worker and x_burst task MUST read the intel.db state produced
+# by the daily and synthesis jobs, so they all live here to share the
+# `pipeline-state-*` cache namespace.
 #
-# Concurrency group `pipeline` serializes all three jobs against each other
-# so cache writes never overlap.
+# Concurrency group `pipeline` serializes runs against each other so cache
+# writes never overlap. WITHIN a single run, `needs:` is used to order
+# daily -> x_burst when both are triggered by the 02:30 UTC cron.
+#
+# Schedule (UTC -> IST):
+#   30 2 * * *           02:30 UTC = 08:00 IST   triggers: daily + x_burst
+#   0 7 * * *            07:00 UTC = 12:30 IST   triggers: x_burst only
+#   0 14 * * 0           Sun 14:00 UTC = 19:30 IST triggers: synthesis
+#   15,30,45 * * * *     every 15 min off :00    triggers: dispatch
 
 on:
   schedule:
-    - cron: "0 7 * * *"          # daily-signals at 07:00 UTC
-    - cron: "0 14 * * 0"         # weekly-synthesis Sundays at 14:00 UTC
-    - cron: "15,30,45 * * * *"   # dispatch-approved 3x/hour (off :00 to skip the 07:00 daily window)
+    - cron: "30 2 * * *"         # daily + x_burst (sequential)
+    - cron: "0 7 * * *"          # x_burst only
+    - cron: "0 14 * * 0"         # weekly synthesis Sundays
+    - cron: "15,30,45 * * * *"   # dispatch-approved 3x/hour (off :00 to skip the 02:30 window)
   workflow_dispatch:
     inputs:
       task:
@@ -24,16 +32,21 @@ on:
         default: "dispatch"
         options:
           - daily
+          - burst
           - synthesis
           - dispatch
       dry_run:
-        description: "Skip publish (daily only)"
+        description: "Skip publish (daily / burst only)"
         type: boolean
         default: false
       sources:
         description: "Source override (daily only; comma-separated)"
         type: string
         default: ""
+      burst_count:
+        description: "Posts per burst (burst only)"
+        type: string
+        default: "2"
 
 permissions:
   contents: read
@@ -51,7 +64,7 @@ jobs:
   # ---------------------------------------------------------------------------
   daily:
     if: |
-      github.event.schedule == '0 7 * * *' ||
+      github.event.schedule == '30 2 * * *' ||
       (github.event_name == 'workflow_dispatch' && inputs.task == 'daily')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -158,6 +171,101 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # X_BURST: draft 2 standalone X posts from recent signals and auto-ship.
+  # No Discord review; voice_lint is the safety net.
+  #
+  # `needs: [daily]` so that when both jobs are triggered by the 02:30 UTC
+  # cron, x_burst runs AFTER daily finishes refreshing the DB. The
+  # `if: always() && ...` lets x_burst still run when daily is skipped
+  # (e.g. the 07:00 UTC cron only fires x_burst).
+  # ---------------------------------------------------------------------------
+  x_burst:
+    needs: [daily]
+    if: |
+      always() && (
+        github.event.schedule == '30 2 * * *' ||
+        github.event.schedule == '0 7 * * *' ||
+        (github.event_name == 'workflow_dispatch' && inputs.task == 'burst')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore pipeline state
+        # Identical path list to the other jobs -- actions/cache hashes
+        # the path list into the cache version, so they must match.
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Resolve burst flags
+        id: burst_flags
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_COUNT:   ${{ inputs.burst_count }}
+        run: |
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            echo "dry_run=1" >> $GITHUB_OUTPUT
+          else
+            echo "dry_run=0" >> $GITHUB_OUTPUT
+          fi
+          if [ -n "${INPUT_COUNT}" ]; then
+            echo "count=${INPUT_COUNT}" >> $GITHUB_OUTPUT
+          else
+            echo "count=2" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run x_burst
+        env:
+          ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
+          ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
+          ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+          BUFFER_ACCESS_TOKEN:    ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_ORG_ID:          ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_X_CHANNEL_ID:    ${{ secrets.BUFFER_X_CHANNEL_ID }}
+          ROUTR_X_BURST_COUNT:    ${{ steps.burst_flags.outputs.count }}
+          ROUTR_X_BURST_DRY_RUN:  ${{ steps.burst_flags.outputs.dry_run }}
+        run: routr-burst
+
+      - name: Save pipeline state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+
+  # ---------------------------------------------------------------------------
   # SYNTHESIS: Sunday cron, build weekly essay, post to Discord, pre-create
   # pending Beehiiv row
   # ---------------------------------------------------------------------------
@@ -248,12 +356,12 @@ jobs:
           python -m pip install -e .
 
       - name: Restore pipeline state
-        # Path list MUST match the daily / synthesis jobs exactly, otherwise
-        # actions/cache treats them as different "cache versions" and the
-        # dispatch worker can't see the daily's intel.db. Include the
-        # anchors-*.json glob even though dispatch doesn't read it -- the
-        # version hash depends on the path list, not on whether the file is
-        # used.
+        # Path list MUST match the daily / synthesis / x_burst jobs exactly,
+        # otherwise actions/cache treats them as different "cache versions"
+        # and the dispatch worker can't see the daily's intel.db. Include
+        # the anchors-*.json glob even though dispatch doesn't read it --
+        # the version hash depends on the path list, not on whether the
+        # file is used.
         uses: actions/cache/restore@v4
         with:
           path: |

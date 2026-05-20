@@ -871,6 +871,153 @@ def check_hook_source_link() -> None:
     )
 
 
+def check_x_burst_surface() -> None:
+    """The standalone X-burst task: drafter, voice_lint variant, signal_store
+    helpers, task module, console script, pipeline.yml schedule.
+
+    Auto-shipping X posts has no human review gate, so its surface gets
+    tighter validation than the daily digest path.
+    """
+
+    section("[14] x_burst standalone task surface")
+
+    # The x_burst prompt file must exist (loaded via lib.config.prompt).
+    from routr_signal.lib.config import prompt as _prompt
+    try:
+        burst_prompt = _prompt("x_burst")
+    except FileNotFoundError:
+        burst_prompt = ""
+    check("config/prompts/x_burst.md exists and is readable", bool(burst_prompt))
+    check(
+        "x_burst prompt explicitly names 25,000 char X Premium cap",
+        "25,000" in burst_prompt or "25000" in burst_prompt,
+    )
+    check(
+        "x_burst prompt declares natural-imperfections allowance",
+        "natural" in burst_prompt.lower() and ("typo" in burst_prompt.lower() or "imperfection" in burst_prompt.lower()),
+    )
+    check(
+        "x_burst prompt bans em-dash + emoji + cliffhangers (carried from post_drafter)",
+        all(s in burst_prompt for s in ("em-dash", "emoji", "cliffhanger")),
+    )
+
+    # Drafter module
+    from routr_signal.classify import x_burst_drafter
+    check("x_burst_drafter exports draft_x_burst", callable(getattr(x_burst_drafter, "draft_x_burst", None)))
+    check(
+        "x_burst_drafter sets SYSTEM_PROMPT_NAME=='x_burst'",
+        getattr(x_burst_drafter, "SYSTEM_PROMPT_NAME", "") == "x_burst",
+    )
+
+    # Voice-lint variant
+    from routr_signal.classify import voice_lint
+    check(
+        "voice_lint exports lint_x_burst_post + lint_x_burst_all",
+        callable(getattr(voice_lint, "lint_x_burst_post", None))
+        and callable(getattr(voice_lint, "lint_x_burst_all", None)),
+    )
+    check(
+        "voice_lint.X_BURST_LENGTH_CAP == 25,000",
+        getattr(voice_lint, "X_BURST_LENGTH_CAP", 0) == 25_000,
+    )
+
+    # Lint rule: a long post (5,000 chars) WITHOUT violations should pass.
+    long_clean = "ran a benchmark across 50,000 requests last night and the numbers were interesting. "
+    long_clean = long_clean * 30  # ~2,400 chars; well under 25k, no banned words
+    long_clean += "p99 latency dropped from 1.4 seconds to 380 milliseconds after the rewrite."
+    res = voice_lint.lint_x_burst_post(PostHook(format="x_thread", anchor_signal_id=None, text=long_clean))
+    check(
+        "lint_x_burst_post accepts a 2k+ char clean post (Premium length)",
+        not res.violations,
+        f"violations: {res.violations}" if res.violations else "",
+    )
+
+    # Lint rule: terminal colon still flags (cliffhanger remains banned).
+    res = voice_lint.lint_x_burst_post(
+        PostHook(format="x_thread", anchor_signal_id=None, text="some thoughts on llm gateways:")
+    )
+    check(
+        "lint_x_burst_post flags terminal-colon cliffhanger",
+        any("cliffhanger" in v for v in res.violations),
+    )
+
+    # Lint rule: raw URL flags (X penalizes link posts).
+    res = voice_lint.lint_x_burst_post(
+        PostHook(format="x_thread", anchor_signal_id=None, text="see https://example.com for details.")
+    )
+    check(
+        "lint_x_burst_post flags raw http(s) URL",
+        any("URL" in v or "url" in v.lower() for v in res.violations),
+    )
+
+    # Lint rule: em-dash still flags.
+    res = voice_lint.lint_x_burst_post(
+        PostHook(format="x_thread", anchor_signal_id=None, text="this is the part \u2014 the only part \u2014 that matters.")
+    )
+    check(
+        "lint_x_burst_post flags em-dash",
+        any("em-dash" in v for v in res.violations),
+    )
+
+    # Lint rule: AI pivot still flags.
+    res = voice_lint.lint_x_burst_post(
+        PostHook(format="x_thread", anchor_signal_id=None, text="it's not the proxy, it's the queue.")
+    )
+    check(
+        "lint_x_burst_post flags it's-not-X-it's-Y AI pivot",
+        any("pivot" in v.lower() for v in res.violations),
+    )
+
+    # signal_store helpers
+    from routr_signal.lib import signal_store as _ss
+    check(
+        "signal_store exports recent_classified_for_drafting",
+        callable(getattr(_ss, "recent_classified_for_drafting", None)),
+    )
+    check(
+        "signal_store exports signal_ids_posted_today",
+        callable(getattr(_ss, "signal_ids_posted_today", None)),
+    )
+    # smoke-call recent_classified_for_drafting on an empty/small DB; must return a list
+    rows = _ss.recent_classified_for_drafting(window_hours=48, min_score=0.0, limit=5)
+    check("recent_classified_for_drafting returns a list", isinstance(rows, list))
+    excluded = _ss.signal_ids_posted_today(kind="x_burst", platform="x")
+    check("signal_ids_posted_today returns a set", isinstance(excluded, set))
+
+    # Task module + CLI
+    from routr_signal.tasks import x_burst
+    check("tasks.x_burst exports run + cli", callable(getattr(x_burst, "run", None)) and callable(getattr(x_burst, "cli", None)))
+    check("tasks.x_burst.DEFAULT_COUNT == 2", getattr(x_burst, "DEFAULT_COUNT", 0) == 2)
+
+    # pyproject console script
+    import pathlib as _pl
+    pyproj = (_pl.Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    check(
+        "pyproject.toml declares routr-burst console script",
+        "routr-burst" in pyproj and "routr_signal.tasks.x_burst:cli" in pyproj,
+    )
+
+    # pipeline.yml schedule + job
+    pipeline_yml = (_pl.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "pipeline.yml").read_text(encoding="utf-8")
+    check(
+        "pipeline.yml has 02:30 UTC cron (8 AM IST)",
+        '"30 2 * * *"' in pipeline_yml,
+    )
+    check(
+        "pipeline.yml has 07:00 UTC cron (12:30 PM IST)",
+        '"0 7 * * *"' in pipeline_yml,
+    )
+    check("pipeline.yml has x_burst job", "x_burst:" in pipeline_yml or "  x_burst:" in pipeline_yml)
+    check(
+        "pipeline.yml x_burst job uses `needs: [daily]` for sequential 02:30 run",
+        "needs: [daily]" in pipeline_yml,
+    )
+    check(
+        "pipeline.yml workflow_dispatch task choices include 'burst'",
+        "burst" in pipeline_yml and "synthesis" in pipeline_yml,
+    )
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -891,6 +1038,7 @@ def main() -> int:
     check_new_sources_register()
     check_topic_frequency()
     check_hook_source_link()
+    check_x_burst_surface()
 
     # ----- Live idempotence ------
     try:
@@ -899,7 +1047,7 @@ def main() -> int:
         check("idempotence check executed without crash", False, str(e))
 
     # ----- LLM variance (informational) ------
-    section("[14] LLM classifier variance across iterations (informational)")
+    section("[15] LLM classifier variance across iterations (informational)")
     items = fixture_raw_items()
     print("  Using 5-item fixture (item 4 should be suppressed pre-LLM).")
     items_after_prefilter = prefilter(items)
