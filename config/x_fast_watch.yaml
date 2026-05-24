@@ -8,73 +8,20 @@
 # the request count low enough for a 15-minute cron lane.
 
 fetch:
-  fresh_window_minutes: 20
+  min_age_minutes: 10
+  fresh_window_minutes: 60
   max_results_per_group: 12
   accounts_per_group: 8
   request_delay_seconds: 10
-  total_max_items: 60
-  min_score: 0.72
+  total_max_items: 80
+  min_score: 0.64
   max_alerts_per_run: 3
   include_replies: false
 
 accounts:
-  # Tier 1: large public AI voices. Reply only when the post has a technical
-  # opening, not generic announcement/news engagement bait.
-  - handle: karpathy
-    tier: 1
-    tags: [llms, deep_learning, education]
-  - handle: AndrewYNg
-    tier: 1
-    tags: [ai_strategy, education]
-  - handle: ylecun
-    tier: 1
-    tags: [research, open_source]
-  - handle: sama
-    tier: 1
-    tags: [openai, frontier_ai]
-  - handle: lexfridman
-    tier: 1
-    tags: [podcast, research]
-  - handle: fchollet
-    tier: 1
-    tags: [reasoning, agi, keras]
-
-  # Core researchers and labs.
-  - handle: soumithchintala
-    tier: 2
-    tags: [pytorch, open_source]
-  - handle: emollick
-    tier: 2
-    tags: [ai_adoption, knowledge_work]
-  - handle: timnitgebru
-    tier: 2
-    tags: [ai_ethics, policy]
-  - handle: oriolvinyalsml
-    tier: 2
-    tags: [deepmind, research]
-  - handle: hardmaru
-    tier: 2
-    tags: [generative_ai, sakana]
-  - handle: dpkingma
-    tier: 2
-    tags: [generative_models, research]
-  - handle: drfeifei
-    tier: 2
-    tags: [vision, policy]
-  - handle: geoffreyhinton
-    tier: 2
-    tags: [deep_learning, safety]
-  - handle: ilyasut
-    tier: 2
-    tags: [frontier_ai, safety]
-  - handle: DarioAmodei
-    tier: 2
-    tags: [anthropic, safety]
-  - handle: j_foerst
-    tier: 2
-    tags: [multi_agent_rl, research]
-
-  # High-signal AI engineering and systems voices.
+  # High-signal AI engineering and systems voices. These are prioritized ahead
+  # of celebrity accounts because fast, substantive replies work best where the
+  # thread is still technical and not already flooded.
   - handle: swyx
     tier: 3
     tags: [ai_engineering, community]
@@ -157,12 +104,6 @@ accounts:
   # AI engineering builders and infra/product founders. These accounts are
   # closer to the swyx/simonw lane: frequent technical openings where a precise
   # reply can add value fast.
-  - handle: hwchase17
-    tier: 2
-    tags: [langchain, agents, observability]
-  - handle: jxnlco
-    tier: 2
-    tags: [structured_outputs, openai, ai_engineering]
   - handle: HamelHusain
     tier: 3
     tags: [evals, ai_engineering, llm_apps]
@@ -175,9 +116,6 @@ accounts:
   - handle: timzaman
     tier: 3
     tags: [frontier_infra, compute, clusters]
-  - handle: ClementDelangue
-    tier: 2
-    tags: [huggingface, open_source, ai_community]
   - handle: julien_c
     tier: 3
     tags: [huggingface, product, open_source]
@@ -190,9 +128,6 @@ accounts:
   - handle: rlancemartin
     tier: 3
     tags: [langchain, rag, agents]
-  - handle: matei_zaharia
-    tier: 2
-    tags: [databricks, ml_systems, research]
   - handle: sh_reya
     tier: 3
     tags: [evals, data_quality, llm_systems]
@@ -203,9 +138,74 @@ accounts:
     tier: 3
     tags: [agents, ai_engineering, finance_ai]
 
+  # Core researchers and labs.
+  - handle: soumithchintala
+    tier: 2
+    tags: [pytorch, open_source]
+  - handle: emollick
+    tier: 2
+    tags: [ai_adoption, knowledge_work]
+  - handle: timnitgebru
+    tier: 2
+    tags: [ai_ethics, policy]
+  - handle: oriolvinyalsml
+    tier: 2
+    tags: [deepmind, research]
+  - handle: hardmaru
+    tier: 2
+    tags: [generative_ai, sakana]
+  - handle: dpkingma
+    tier: 2
+    tags: [generative_models, research]
+  - handle: drfeifei
+    tier: 2
+    tags: [vision, policy]
+  - handle: geoffreyhinton
+    tier: 2
+    tags: [deep_learning, safety]
+  - handle: ilyasut
+    tier: 2
+    tags: [frontier_ai, safety]
+  - handle: DarioAmodei
+    tier: 2
+    tags: [anthropic, safety]
+  - handle: j_foerst
+    tier: 2
+    tags: [multi_agent_rl, research]
+  - handle: hwchase17
+    tier: 2
+    tags: [langchain, agents, observability]
+  - handle: jxnlco
+    tier: 2
+    tags: [structured_outputs, openai, ai_engineering]
+  - handle: ClementDelangue
+    tier: 2
+    tags: [huggingface, open_source, ai_community]
+  - handle: matei_zaharia
+    tier: 2
+    tags: [databricks, ml_systems, research]
+
   # VC/operator-investor lane. These are not all reply targets every time;
   # they are useful when they post concrete AI startup patterns, pricing,
   # distribution, productization, or technical wedge observations.
+  - handle: sonyatweetybird
+    tier: 3
+    tags: [vc, ai_apps, sequoia]
+  - handle: omooretweets
+    tier: 3
+    tags: [vc, ai_apps, consumer_ai]
+  - handle: AnjneyMidha
+    tier: 3
+    tags: [vc, ai_infra, a16z]
+  - handle: nabeelqu
+    tier: 3
+    tags: [spark, ai_startups, vc]
+  - handle: semil
+    tier: 3
+    tags: [vc, ai_startups, seed]
+  - handle: lpolovets
+    tier: 3
+    tags: [vc, startups, seed]
   - handle: snowmaker
     tier: 2
     tags: [yc, ai_startups, vc]
@@ -221,24 +221,27 @@ accounts:
   - handle: saranormous
     tier: 2
     tags: [vc, ai_apps, conviction]
-  - handle: sonyatweetybird
-    tier: 3
-    tags: [vc, ai_apps, sequoia]
-  - handle: omooretweets
-    tier: 3
-    tags: [vc, ai_apps, consumer_ai]
-  - handle: AnjneyMidha
-    tier: 3
-    tags: [vc, ai_infra, a16z]
   - handle: martin_casado
     tier: 2
     tags: [a16z, infra, ai_startups]
-  - handle: nabeelqu
-    tier: 3
-    tags: [spark, ai_startups, vc]
-  - handle: semil
-    tier: 3
-    tags: [vc, ai_startups, seed]
-  - handle: lpolovets
-    tier: 3
-    tags: [vc, startups, seed]
+
+  # Tier 1: large public AI voices. Reply only when the post has a technical
+  # opening, not generic announcement/news engagement bait.
+  - handle: karpathy
+    tier: 1
+    tags: [llms, deep_learning, education]
+  - handle: AndrewYNg
+    tier: 1
+    tags: [ai_strategy, education]
+  - handle: ylecun
+    tier: 1
+    tags: [research, open_source]
+  - handle: sama
+    tier: 1
+    tags: [openai, frontier_ai]
+  - handle: lexfridman
+    tier: 1
+    tags: [podcast, research]
+  - handle: fchollet
+    tier: 1
+    tags: [reasoning, agi, keras]

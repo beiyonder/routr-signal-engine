@@ -15,11 +15,12 @@ from ..lib.types import RawItem
 from ..sources import twitter
 
 
-DEFAULT_FRESH_WINDOW_MINUTES = 20
+DEFAULT_FRESH_WINDOW_MINUTES = 60
+DEFAULT_MIN_AGE_MINUTES = 10
 DEFAULT_ACCOUNTS_PER_GROUP = 8
 DEFAULT_MAX_RESULTS_PER_GROUP = 12
 DEFAULT_MAX_ALERTS = 3
-DEFAULT_MIN_SCORE = 0.72
+DEFAULT_MIN_SCORE = 0.64
 
 
 def _run_id() -> str:
@@ -51,6 +52,7 @@ def run(*, dry_run: bool = False) -> int:
         env("ROUTR_X_WATCH_FRESH_WINDOW_MINUTES")
         or fetch_cfg.get("fresh_window_minutes", DEFAULT_FRESH_WINDOW_MINUTES)
     )
+    min_age = int(env("ROUTR_X_WATCH_MIN_AGE_MINUTES") or fetch_cfg.get("min_age_minutes", DEFAULT_MIN_AGE_MINUTES))
     max_alerts = int(
         env("ROUTR_X_WATCH_MAX_ALERTS") or fetch_cfg.get("max_alerts_per_run", DEFAULT_MAX_ALERTS)
     )
@@ -66,7 +68,7 @@ def run(*, dry_run: bool = False) -> int:
         # threshold/prompt changes or the operator widens the run window.
         persist_seen=False,
     )
-    fresh = _fresh_items(items, window_minutes=fresh_window)
+    fresh = _fresh_items(items, min_age_minutes=min_age, window_minutes=fresh_window)
     fresh = [
         it
         for it in fresh
@@ -80,7 +82,7 @@ def run(*, dry_run: bool = False) -> int:
             source_counts={"x": len(items)},
             cosine_kept={},
             classifier_relevant={},
-            notes=[f"no fresh unalerted tweets within {fresh_window}m"],
+            notes=[f"no fresh unalerted tweets within {min_age}-{fresh_window}m"],
             digest_md=None,
             hooks=None,
         )
@@ -183,7 +185,7 @@ def run(*, dry_run: bool = False) -> int:
 
 def _build_twitter_config(cfg: dict[str, Any]) -> dict[str, Any]:
     fetch_cfg = cfg.get("fetch", {}) if isinstance(cfg.get("fetch"), dict) else {}
-    accounts = [a for a in cfg.get("accounts", []) if isinstance(a, dict) and a.get("handle")]
+    accounts = _prioritized_accounts(cfg)
     per_group = int(fetch_cfg.get("accounts_per_group", DEFAULT_ACCOUNTS_PER_GROUP))
     max_results = int(fetch_cfg.get("max_results_per_group", DEFAULT_MAX_RESULTS_PER_GROUP))
     delay = float(fetch_cfg.get("request_delay_seconds", 10))
@@ -210,9 +212,32 @@ def _build_twitter_config(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fresh_items(items: list[RawItem], *, window_minutes: int) -> list[RawItem]:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
-    fresh = [it for it in items if it.created_at.astimezone(timezone.utc) >= cutoff]
+def _prioritized_accounts(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    accounts = [a for a in cfg.get("accounts", []) if isinstance(a, dict) and a.get("handle")]
+
+    def _rank(account: dict[str, Any]) -> tuple[int, int]:
+        tags = {str(t) for t in account.get("tags", []) if t}
+        tier = int(account.get("tier") or 9)
+        if "vc" in tags:
+            lane = 2
+        elif tier == 1:
+            lane = 3
+        else:
+            lane = 0 if tier == 3 else 1
+        return (lane, tier)
+
+    return sorted(accounts, key=_rank)
+
+
+def _fresh_items(items: list[RawItem], *, min_age_minutes: int, window_minutes: int) -> list[RawItem]:
+    now = datetime.now(timezone.utc)
+    oldest = now - timedelta(minutes=window_minutes)
+    newest = now - timedelta(minutes=min_age_minutes)
+    fresh = [
+        it
+        for it in items
+        if oldest <= it.created_at.astimezone(timezone.utc) <= newest
+    ]
     fresh.sort(key=lambda it: it.created_at, reverse=True)
     return fresh
 
@@ -246,18 +271,20 @@ def _render_dm(
     tags = ", ".join(str(t) for t in meta.get("tags", [])) or "n/a"
     return "\n".join(
         [
+            "COPY SUGGESTED REPLY ONLY:",
+            "```",
+            opp.suggested_reply,
+            "```",
+            "",
             f"Account: {item.author or 'unknown'} | tier {meta.get('tier', 'n/a')} | {tags}",
             f"Age: {age_minutes}m",
-            f"URL: {item.url}",
+            f"Source: {item.url}",
             "",
             "Tweet:",
             item.body.strip(),
             "",
             f"Why reply: {opp.reason}",
             f"Angle: {opp.reply_angle}",
-            "",
-            "Suggested reply:",
-            opp.suggested_reply,
         ]
     )
 

@@ -1089,8 +1089,8 @@ def check_x_watch_surface() -> None:
         scorer_prompt = ""
     check("config/prompts/x_reply_scorer.md exists", bool(scorer_prompt))
     check(
-        "x_reply_scorer prompt is about fast replies within 15 minutes",
-        "15 minutes" in scorer_prompt and "suggested_reply" in scorer_prompt,
+        "x_reply_scorer prompt is about fast replies within 10-60 minutes",
+        "10-60 minutes" in scorer_prompt and "suggested_reply" in scorer_prompt,
     )
 
     response = {
@@ -1113,6 +1113,29 @@ def check_x_watch_surface() -> None:
     searches = built.get("searches", [])
     check("x_watch builds grouped X `from:` searches", isinstance(searches, list) and searches and "from:" in searches[0])
     check("x_watch grouped searches exclude replies by default", all("-filter:replies" in s for s in searches))
+    check("x_watch prioritizes mid-tier builder accounts first", "from:swyx" in searches[0] and "from:simonw" in " ".join(searches[:2]))
+    check("x_watch config uses 10-60m production recency", cfg.get("fetch", {}).get("min_age_minutes") == 10 and cfg.get("fetch", {}).get("fresh_window_minutes") == 60)
+    sample_reply = x_watch._render_dm(
+        RawItem(
+            id="xwatch-test",
+            source="x",
+            title="t",
+            body="tweet body",
+            url="https://twitter.com/example/status/1",
+            author="@swyx",
+            created_at=datetime.now(timezone.utc),
+        ),
+        x_reply_scorer.ReplyOpportunity(
+            signal_id="xwatch-test",
+            score=0.8,
+            reason="reason",
+            reply_angle="angle",
+            suggested_reply="copy only this",
+        ),
+        account_meta={"swyx": {"tier": 3, "tags": ["ai_engineering"]}},
+    )
+    check("x_watch DM starts with copy-only suggested reply block", sample_reply.startswith("COPY SUGGESTED REPLY ONLY:\n```\ncopy only this\n```"))
+    check("x_watch DM labels tweet URL as Source", "Source: https://twitter.com/example/status/1" in sample_reply)
     check("x_watch dry-run kind is isolated from real alert dedupe", "x_reply_alert_dry_run" in x_watch.run.__code__.co_consts)
     import inspect as _inspect
     x_watch_run_src = _inspect.getsource(x_watch.run)
@@ -1133,7 +1156,7 @@ def check_x_watch_surface() -> None:
     check("pipeline.yml has fast X watch cron", '"5,20,35,50 * * * *"' in pipeline_yml)
     check("pipeline.yml has x_watch job", "x_watch:" in pipeline_yml)
     check("pipeline.yml wires dry_run into x_watch", "ROUTR_X_WATCH_DRY_RUN" in pipeline_yml)
-    check("pipeline.yml exposes x_watch dry-run tuning inputs", "x_watch_window_minutes" in pipeline_yml and "ROUTR_X_WATCH_MIN_SCORE" in pipeline_yml)
+    check("pipeline.yml exposes x_watch dry-run tuning inputs", "x_watch_window_minutes" in pipeline_yml and "ROUTR_X_WATCH_MIN_AGE_MINUTES" in pipeline_yml and "ROUTR_X_WATCH_MIN_SCORE" in pipeline_yml)
     check("pipeline.yml workflow_dispatch task choices include x_watch", "x_watch" in pipeline_yml)
 
 

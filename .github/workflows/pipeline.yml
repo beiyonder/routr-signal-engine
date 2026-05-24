@@ -53,7 +53,11 @@ on:
       x_watch_window_minutes:
         description: "Freshness window for x_watch dry-run testing"
         type: string
-        default: "20"
+        default: "60"
+      x_watch_min_age_minutes:
+        description: "Minimum tweet age for x_watch"
+        type: string
+        default: "10"
       x_watch_min_score:
         description: "Minimum x_watch reply score"
         type: string
@@ -407,6 +411,7 @@ jobs:
           ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_X_WATCH_DELAY_S || '10' }}
           ROUTR_X_WATCH_DRY_RUN:  ${{ inputs.dry_run }}
           ROUTR_X_WATCH_FRESH_WINDOW_MINUTES: ${{ inputs.x_watch_window_minutes }}
+          ROUTR_X_WATCH_MIN_AGE_MINUTES: ${{ inputs.x_watch_min_age_minutes }}
           ROUTR_X_WATCH_MIN_SCORE: ${{ inputs.x_watch_min_score }}
           ROUTR_X_WATCH_MAX_ALERTS: ${{ inputs.x_watch_max_alerts }}
         run: routr-x-watch
