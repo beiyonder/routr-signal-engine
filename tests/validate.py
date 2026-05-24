@@ -1068,6 +1068,72 @@ def check_x_burst_surface() -> None:
     )
 
 
+def check_x_watch_surface() -> None:
+    section("[15] x_watch fast-reply task surface")
+
+    from routr_signal.classify import x_reply_scorer
+    from routr_signal.lib.config import prompt as _prompt, x_fast_watch as _x_fast_watch
+    from routr_signal.tasks import x_watch
+
+    cfg = _x_fast_watch()
+    accounts = cfg.get("accounts", []) if isinstance(cfg, dict) else []
+    check("config/x_fast_watch.yaml loads", isinstance(cfg, dict) and bool(cfg))
+    check("x_fast_watch config includes at least 60 accounts", isinstance(accounts, list) and len(accounts) >= 60)
+    handles = {str(a.get("handle", "")).lower() for a in accounts if isinstance(a, dict)}
+    check("x_fast_watch includes VC lane accounts", {"snowmaker", "deedydas", "garrytan"}.issubset(handles))
+    check("x_fast_watch includes AI-builder lane accounts", {"hwchase17", "jxnlco", "timzaman"}.issubset(handles))
+
+    try:
+        scorer_prompt = _prompt("x_reply_scorer")
+    except FileNotFoundError:
+        scorer_prompt = ""
+    check("config/prompts/x_reply_scorer.md exists", bool(scorer_prompt))
+    check(
+        "x_reply_scorer prompt is about fast replies within 15 minutes",
+        "15 minutes" in scorer_prompt and "suggested_reply" in scorer_prompt,
+    )
+
+    response = {
+        "opportunities": [
+            {
+                "id": "xwatch-1",
+                "score": 0.91,
+                "reason": "Strong technical opening.",
+                "reply_angle": "Add the eval distinction.",
+                "suggested_reply": "the missing distinction is model failure vs orchestration failure. most agent evals blend them together.",
+            },
+            {"id": "xwatch-2", "score": "bad", "suggested_reply": ""},
+        ]
+    }
+    parsed = x_reply_scorer._parse_response(response)
+    check("x_reply_scorer._parse_response returns two entries", len(parsed) == 2)
+    check("x_reply_scorer clamps invalid score to 0", parsed[1].score == 0.0)
+
+    built = x_watch._build_twitter_config(cfg)
+    searches = built.get("searches", [])
+    check("x_watch builds grouped X `from:` searches", isinstance(searches, list) and searches and "from:" in searches[0])
+    check("x_watch grouped searches exclude replies by default", all("-filter:replies" in s for s in searches))
+    check("x_watch dry-run kind is isolated from real alert dedupe", "x_reply_alert_dry_run" in x_watch.run.__code__.co_consts)
+    import inspect as _inspect
+    x_watch_run_src = _inspect.getsource(x_watch.run)
+    check(
+        "x_watch dry-run does not persist fetched tweets as seen",
+        "persist_seen=not dry_run" in x_watch_run_src,
+    )
+
+    import pathlib as _pl
+    pyproj = (_pl.Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    check(
+        "pyproject.toml declares routr-x-watch console script",
+        "routr-x-watch" in pyproj and "routr_signal.tasks.x_watch:cli" in pyproj,
+    )
+
+    pipeline_yml = (_pl.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "pipeline.yml").read_text(encoding="utf-8")
+    check("pipeline.yml has fast X watch cron", '"5,20,35,50 * * * *"' in pipeline_yml)
+    check("pipeline.yml has x_watch job", "x_watch:" in pipeline_yml)
+    check("pipeline.yml workflow_dispatch task choices include x_watch", "x_watch" in pipeline_yml)
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -1089,6 +1155,7 @@ def main() -> int:
     check_topic_frequency()
     check_hook_source_link()
     check_x_burst_surface()
+    check_x_watch_surface()
 
     # ----- Live idempotence ------
     try:
@@ -1097,7 +1164,7 @@ def main() -> int:
         check("idempotence check executed without crash", False, str(e))
 
     # ----- LLM variance (informational) ------
-    section("[15] LLM classifier variance across iterations (informational)")
+    section("[16] LLM classifier variance across iterations (informational)")
     items = fixture_raw_items()
     print("  Using 5-item fixture (item 4 should be suppressed pre-LLM).")
     items_after_prefilter = prefilter(items)

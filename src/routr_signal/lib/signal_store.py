@@ -551,3 +551,11 @@ def posts_by_status(status: str, *, limit: int = 100) -> list[dict[str, Any]]:
 def get_post(post_id: str) -> dict[str, Any] | None:
     row = get_db().execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
     return dict(row) if row else None
+
+
+def has_post_for_signal(*, kind: str, signal_id: str) -> bool:
+    row = get_db().execute(
+        "SELECT 1 FROM posts WHERE kind = ? AND signal_id = ? LIMIT 1",
+        (kind, signal_id),
+    ).fetchone()
+    return row is not None

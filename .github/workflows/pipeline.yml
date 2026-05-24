@@ -1,6 +1,6 @@
 name: pipeline
 
-# One workflow file, four jobs, four cron triggers.
+# One workflow file, five jobs, five cron triggers.
 #
 # Why one file: GitHub Actions cache is scoped to the workflow file. The
 # dispatch worker and x_burst task MUST read the intel.db state produced
@@ -16,6 +16,7 @@ name: pipeline
 #   0 7 * * *            07:00 UTC = 12:30 IST   triggers: x_burst only
 #   0 14 * * 0           Sun 14:00 UTC = 19:30 IST triggers: synthesis
 #   15,30,45 * * * *     every 15 min off :00    triggers: dispatch
+#   5,20,35,50 * * * *   every 15 min             triggers: x_watch
 
 on:
   schedule:
@@ -23,6 +24,7 @@ on:
     - cron: "0 7 * * *"          # x_burst only
     - cron: "0 14 * * 0"         # weekly synthesis Sundays
     - cron: "15,30,45 * * * *"   # dispatch-approved 3x/hour (off :00 to skip the 02:30 window)
+    - cron: "5,20,35,50 * * * *" # fast X reply monitor
   workflow_dispatch:
     inputs:
       task:
@@ -35,6 +37,7 @@ on:
           - burst
           - synthesis
           - dispatch
+          - x_watch
       dry_run:
         description: "Skip publish (daily / burst only)"
         type: boolean
@@ -322,6 +325,75 @@ jobs:
           OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
           DISCORD_WEBHOOK_URL:    ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: routr-synthesize
+
+      - name: Save pipeline state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+
+  # ---------------------------------------------------------------------------
+  # X_WATCH: monitor broad AI accounts for fast reply opportunities and DM them
+  # ---------------------------------------------------------------------------
+  x_watch:
+    if: |
+      github.event.schedule == '5,20,35,50 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'x_watch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install Playwright Chromium (X fallback)
+        run: python -m playwright install --with-deps chromium
+
+      - name: Restore pipeline state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/intel.db
+            data/intel.db-shm
+            data/intel.db-wal
+            data/cache/anchors-*.json
+          key: ${{ env.PIPELINE_CACHE_KEY }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Run fast X watch
+        env:
+          ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
+          ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
+          ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+          TWITTER_COOKIES_B64:    ${{ secrets.TWITTER_COOKIES_B64 }}
+          DISCORD_BOT_TOKEN:      ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID:     ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_USER_DM_ID:     ${{ secrets.DISCORD_USER_DM_ID }}
+          ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_X_WATCH_DELAY_S || '10' }}
+        run: routr-x-watch
 
       - name: Save pipeline state
         if: always()

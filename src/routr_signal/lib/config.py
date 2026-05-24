@@ -49,6 +49,15 @@ def twitter_watch() -> dict[str, Any]:
     return _load_yaml(path)
 
 
+@lru_cache(maxsize=1)
+def x_fast_watch() -> dict[str, Any]:
+    """Fast X reply-monitor config. Returns {} if absent."""
+
+    path = config_dir() / "x_fast_watch.yaml"
+    if not path.exists():
+        return {}
+    return _load_yaml(path)
+
 
 @lru_cache(maxsize=1)
 def hf_papers() -> dict[str, Any]:

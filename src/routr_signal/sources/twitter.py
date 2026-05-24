@@ -32,6 +32,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from ..lib import signal_store
 from ..lib.config import twitter_watch
 from ..lib.dedupe import SeenStore
 from ..lib.env import env, env_flag
@@ -379,7 +380,7 @@ async def _scrape_url(page: Any, url: str, *, max_items: int) -> list[dict[str, 
     return scraped[:max_items]
 
 
-async def _fetch_via_playwright() -> list[RawItem]:
+async def _fetch_via_playwright_config(cfg: dict[str, Any]) -> list[RawItem]:
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -391,7 +392,6 @@ async def _fetch_via_playwright() -> list[RawItem]:
         warn("twitter: no usable cookies for Playwright fallback; skipping")
         return []
 
-    cfg = twitter_watch()
     fetch_cfg = cfg.get("fetch", {})
     max_search = int(fetch_cfg.get("max_search_results", 12))
     max_user = int(fetch_cfg.get("max_user_tweets", 8))
@@ -459,6 +459,57 @@ async def _fetch_via_playwright() -> list[RawItem]:
             await browser.close()
 
     return items
+
+
+async def _fetch_via_playwright() -> list[RawItem]:
+    return await _fetch_via_playwright_config(twitter_watch())
+
+
+def fetch_from_config(
+    cfg: dict[str, Any],
+    *,
+    apply_keyword_prefilter: bool = True,
+    id_prefix: str = SOURCE,
+    persist_seen: bool = True,
+) -> list[RawItem]:
+    """Fetch X items from an explicit config dict.
+
+    The daily source uses `twitter_watch.yaml` and source ids like `x-<tweet_id>`.
+    Fast-reply monitoring passes a different config and `id_prefix="xwatch"` so
+    broad AI monitoring does not consume the daily digest's X dedupe namespace.
+    """
+
+    if not cfg or (not cfg.get("searches") and not cfg.get("users")):
+        return []
+
+    _ensure_windows_proactor_loop()
+    _hydrate_cookies_from_env()
+
+    try:
+        items = asyncio.run(_fetch_via_playwright_config(cfg))
+        info(f"twitter: explicit config returned {len(items)} items")
+    except Exception as e:  # noqa: BLE001
+        error(f"twitter: explicit Playwright config crashed: {e}")
+        items = []
+
+    fresh: list[RawItem] = []
+    for it in items:
+        if id_prefix != SOURCE and it.id.startswith(f"{SOURCE}-"):
+            it.id = f"{id_prefix}-{it.id.removeprefix(f'{SOURCE}-')}"
+            it.extra["canonical_x_id"] = it.id.removeprefix(f"{id_prefix}-")
+        if persist_seen and signal_store.is_seen(it.id):
+            continue
+        if persist_seen:
+            signal_store.upsert_fetched(it, run_id=None)
+        fresh.append(it)
+
+    if apply_keyword_prefilter:
+        filtered = prefilter(fresh)
+        info(f"twitter: {len(fresh)} new, {len(filtered)} pass keyword prefilter")
+        return filtered
+
+    info(f"twitter: {len(fresh)} new, keyword prefilter skipped")
+    return fresh
 
 
 def _row_to_item(row: dict[str, Any], *, attributed_to: str) -> RawItem | None:
