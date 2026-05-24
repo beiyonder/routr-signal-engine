@@ -50,6 +50,18 @@ on:
         description: "Posts per burst (burst only)"
         type: string
         default: "2"
+      x_watch_window_minutes:
+        description: "Freshness window for x_watch dry-run testing"
+        type: string
+        default: "20"
+      x_watch_min_score:
+        description: "Minimum x_watch reply score"
+        type: string
+        default: "0.72"
+      x_watch_max_alerts:
+        description: "Max x_watch alerts per run"
+        type: string
+        default: "3"
 
 permissions:
   contents: read
@@ -394,6 +406,9 @@ jobs:
           DISCORD_USER_DM_ID:     ${{ secrets.DISCORD_USER_DM_ID }}
           ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_X_WATCH_DELAY_S || '10' }}
           ROUTR_X_WATCH_DRY_RUN:  ${{ inputs.dry_run }}
+          ROUTR_X_WATCH_FRESH_WINDOW_MINUTES: ${{ inputs.x_watch_window_minutes }}
+          ROUTR_X_WATCH_MIN_SCORE: ${{ inputs.x_watch_min_score }}
+          ROUTR_X_WATCH_MAX_ALERTS: ${{ inputs.x_watch_max_alerts }}
         run: routr-x-watch
 
       - name: Save pipeline state

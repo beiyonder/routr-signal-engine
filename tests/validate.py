@@ -1132,6 +1132,7 @@ def check_x_watch_surface() -> None:
     check("pipeline.yml has fast X watch cron", '"5,20,35,50 * * * *"' in pipeline_yml)
     check("pipeline.yml has x_watch job", "x_watch:" in pipeline_yml)
     check("pipeline.yml wires dry_run into x_watch", "ROUTR_X_WATCH_DRY_RUN" in pipeline_yml)
+    check("pipeline.yml exposes x_watch dry-run tuning inputs", "x_watch_window_minutes" in pipeline_yml and "ROUTR_X_WATCH_MIN_SCORE" in pipeline_yml)
     check("pipeline.yml workflow_dispatch task choices include x_watch", "x_watch" in pipeline_yml)
 
 

@@ -47,9 +47,14 @@ def run(*, dry_run: bool = False) -> int:
         return 0
 
     fetch_cfg = cfg.get("fetch", {}) if isinstance(cfg.get("fetch"), dict) else {}
-    fresh_window = int(fetch_cfg.get("fresh_window_minutes", DEFAULT_FRESH_WINDOW_MINUTES))
-    max_alerts = int(fetch_cfg.get("max_alerts_per_run", DEFAULT_MAX_ALERTS))
-    min_score = float(fetch_cfg.get("min_score", DEFAULT_MIN_SCORE))
+    fresh_window = int(
+        env("ROUTR_X_WATCH_FRESH_WINDOW_MINUTES")
+        or fetch_cfg.get("fresh_window_minutes", DEFAULT_FRESH_WINDOW_MINUTES)
+    )
+    max_alerts = int(
+        env("ROUTR_X_WATCH_MAX_ALERTS") or fetch_cfg.get("max_alerts_per_run", DEFAULT_MAX_ALERTS)
+    )
+    min_score = float(env("ROUTR_X_WATCH_MIN_SCORE") or fetch_cfg.get("min_score", DEFAULT_MIN_SCORE))
 
     search_cfg = _build_twitter_config(cfg)
     items = twitter.fetch_from_config(
