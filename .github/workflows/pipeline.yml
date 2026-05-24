@@ -393,6 +393,7 @@ jobs:
           DISCORD_CHANNEL_ID:     ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_USER_DM_ID:     ${{ secrets.DISCORD_USER_DM_ID }}
           ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_X_WATCH_DELAY_S || '10' }}
+          ROUTR_X_WATCH_DRY_RUN:  ${{ inputs.dry_run }}
         run: routr-x-watch
 
       - name: Save pipeline state
