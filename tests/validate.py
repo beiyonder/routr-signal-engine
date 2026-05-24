@@ -1118,8 +1118,9 @@ def check_x_watch_surface() -> None:
     x_watch_run_src = _inspect.getsource(x_watch.run)
     check(
         "x_watch dry-run does not persist fetched tweets as seen",
-        "persist_seen=not dry_run" in x_watch_run_src,
+        "persist_seen=False" in x_watch_run_src,
     )
+    check("x_watch never dedupes raw fetches as seen", "dedupes on sent alerts" in x_watch_run_src)
 
     import pathlib as _pl
     pyproj = (_pl.Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")

@@ -61,7 +61,10 @@ def run(*, dry_run: bool = False) -> int:
         search_cfg,
         apply_keyword_prefilter=False,
         id_prefix="xwatch",
-        persist_seen=not dry_run,
+        # x_watch dedupes on sent alerts, not raw fetches. Marking every
+        # fetched tweet as seen would suppress a later alert if the scorer
+        # threshold/prompt changes or the operator widens the run window.
+        persist_seen=False,
     )
     fresh = _fresh_items(items, window_minutes=fresh_window)
     fresh = [
