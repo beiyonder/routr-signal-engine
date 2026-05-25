@@ -36,6 +36,7 @@ def draft_x_burst(
     count: int = DEFAULT_COUNT,
     topic_frequency: dict[str, int] | None = None,
     excluded_signal_ids: set[str] | None = None,
+    recent_posts: list[dict[str, Any]] | None = None,
 ) -> list[PostHook]:
     """Return up to `count` standalone X posts as PostHook(format='x_thread').
 
@@ -62,6 +63,7 @@ def draft_x_burst(
         count=count,
         topic_frequency=topic_frequency,
         excluded_signal_ids=excluded_signal_ids,
+        recent_posts=recent_posts,
     )
     system = prompt(SYSTEM_PROMPT_NAME)
 
@@ -84,6 +86,7 @@ def _render_payload(
     count: int,
     topic_frequency: dict[str, int] | None,
     excluded_signal_ids: set[str] | None,
+    recent_posts: list[dict[str, Any]] | None,
 ) -> str:
     payload: dict[str, Any] = {
         "COUNT": count,
@@ -103,6 +106,14 @@ def _render_payload(
         ],
         "topic_frequency_last_7_days": topic_frequency or {},
         "signal_ids_already_posted_today": sorted(excluded_signal_ids or []),
+        "recent_x_posts_last_14_days": [
+            {
+                "signal_id": p.get("signal_id"),
+                "status": p.get("status"),
+                "text_excerpt": (p.get("text") or "")[:500],
+            }
+            for p in (recent_posts or [])[:20]
+        ],
     }
     return (
         f"Generate exactly {count} standalone X posts as specified in the system prompt. "
@@ -112,7 +123,10 @@ def _render_payload(
         "null and ground the post in long-running topics.\n\n"
         "Vary post length within the burst (one short, one mid is a good default). "
         "Use topic_frequency_last_7_days to avoid re-covering saturated angles. "
-        "Do NOT anchor to any id in signal_ids_already_posted_today.\n\n"
+        "Do NOT anchor to any id in signal_ids_already_posted_today. "
+        "Study recent_x_posts_last_14_days and avoid repeating their claims, metaphors, "
+        "failure modes, rhythm, or framing. If the only available draft would sound like "
+        "one of those posts with nouns swapped, return fewer posts.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
 

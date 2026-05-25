@@ -875,8 +875,8 @@ def check_x_burst_surface() -> None:
     """The standalone X-burst task: drafter, voice_lint variant, signal_store
     helpers, task module, console script, pipeline.yml schedule.
 
-    Auto-shipping X posts has no human review gate, so its surface gets
-    tighter validation than the daily digest path.
+    This lane used to auto-ship short posts. It is now manual-review only,
+    so validation locks that safety property.
     """
 
     section("[14] x_burst standalone task surface")
@@ -893,8 +893,8 @@ def check_x_burst_surface() -> None:
         "25,000" in burst_prompt or "25000" in burst_prompt,
     )
     check(
-        "x_burst prompt explains the 270-char auto-ship boundary and DM routing",
-        "270" in burst_prompt and "DM" in burst_prompt,
+        "x_burst prompt says nothing auto-ships to X",
+        "Nothing from this lane auto-ships to X" in burst_prompt,
     )
     check(
         "x_burst prompt declares natural-imperfections allowance",
@@ -903,6 +903,10 @@ def check_x_burst_surface() -> None:
     check(
         "x_burst prompt bans em-dash + emoji + cliffhangers (carried from post_drafter)",
         all(s in burst_prompt for s in ("em-dash", "emoji", "cliffhanger")),
+    )
+    check(
+        "x_burst prompt includes recent post novelty memory",
+        "recent_x_posts_last_14_days" in burst_prompt and "same post with nouns swapped" in burst_prompt,
     )
 
     # Drafter module
@@ -924,10 +928,7 @@ def check_x_burst_surface() -> None:
         "voice_lint.X_BURST_LENGTH_CAP == 25,000 (X Premium hard cap)",
         getattr(voice_lint, "X_BURST_LENGTH_CAP", 0) == 25_000,
     )
-    check(
-        "voice_lint.X_BURST_AUTO_SHIP_CAP == 270 (Buffer-effective limit)",
-        getattr(voice_lint, "X_BURST_AUTO_SHIP_CAP", 0) == 270,
-    )
+    check("voice_lint still defines Buffer legacy cap for lint/router compatibility", getattr(voice_lint, "X_BURST_AUTO_SHIP_CAP", 0) == 270)
 
     # A 250-char clean post should pass.
     short_clean = (
@@ -1028,16 +1029,35 @@ def check_x_burst_surface() -> None:
         "signal_store exports signal_ids_posted_today",
         callable(getattr(_ss, "signal_ids_posted_today", None)),
     )
+    check(
+        "signal_store exports 14d post memory helpers",
+        callable(getattr(_ss, "signal_ids_posted_since", None))
+        and callable(getattr(_ss, "recent_post_texts", None)),
+    )
     # smoke-call recent_classified_for_drafting on an empty/small DB; must return a list
     rows = _ss.recent_classified_for_drafting(window_hours=48, min_score=0.0, limit=5)
     check("recent_classified_for_drafting returns a list", isinstance(rows, list))
     excluded = _ss.signal_ids_posted_today(kind="x_burst", platform="x")
     check("signal_ids_posted_today returns a set", isinstance(excluded, set))
+    excluded_recent = _ss.signal_ids_posted_since(kind="x_burst", platform="x", days=14)
+    check("signal_ids_posted_since returns a set", isinstance(excluded_recent, set))
+    recent_texts = _ss.recent_post_texts(kind="x_burst", platform="x", days=14, limit=3)
+    check("recent_post_texts returns a list", isinstance(recent_texts, list))
 
     # Task module + CLI
     from routr_signal.tasks import x_burst
     check("tasks.x_burst exports run + cli", callable(getattr(x_burst, "run", None)) and callable(getattr(x_burst, "cli", None)))
     check("tasks.x_burst.DEFAULT_COUNT == 2", getattr(x_burst, "DEFAULT_COUNT", 0) == 2)
+    check("tasks.x_burst has recent-post memory window", getattr(x_burst, "RECENT_POST_MEMORY_DAYS", 0) == 14)
+    check("x_burst dry runs use isolated post kind", "x_burst_dry_run" in x_burst._record_dry_run.__code__.co_consts)
+    check(
+        "x_burst similarity check detects repeated drafts",
+        x_burst._most_similar_recent_post(
+            "agent review failed because rollback boundaries were unclear",
+            [{"id": "p1", "text": "rollback boundaries were unclear in the long agent review"}],
+        )
+        is not None,
+    )
 
     # pyproject console script
     import pathlib as _pl
@@ -1058,6 +1078,7 @@ def check_x_burst_surface() -> None:
         '"0 7 * * *"' in pipeline_yml,
     )
     check("pipeline.yml has x_burst job", "x_burst:" in pipeline_yml or "  x_burst:" in pipeline_yml)
+    check("pipeline.yml documents x_burst manual-review only", "Nothing in this lane auto-ships to X" in pipeline_yml)
     check(
         "pipeline.yml x_burst job uses `needs: [daily]` for sequential 02:30 run",
         "needs: [daily]" in pipeline_yml,

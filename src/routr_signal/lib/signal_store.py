@@ -279,6 +279,63 @@ def signal_ids_posted_today(
     return {r[0] for r in rows if r[0]}
 
 
+def signal_ids_posted_since(
+    *,
+    kind: str = "x_burst",
+    platform: str = "x",
+    days: int = 14,
+) -> set[str]:
+    """Signal IDs that already produced posts in the recent past.
+
+    Used by drafting tasks to avoid recycling the same source material across
+    days. Includes pending/manual/dry-run rows because repeated drafts still
+    feel repetitive to the operator even if not publicly posted.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = get_db().execute(
+        """
+        SELECT DISTINCT signal_id
+          FROM posts
+         WHERE kind = ?
+           AND platform = ?
+           AND signal_id IS NOT NULL
+           AND created_at >= ?
+        """,
+        (kind, platform, cutoff_iso),
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
+def recent_post_texts(
+    *,
+    kind: str = "x_burst",
+    platform: str = "x",
+    days: int = 14,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Recent post text records for novelty checks and prompt memory."""
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = get_db().execute(
+        """
+        SELECT id, signal_id, text, status, created_at, metadata
+          FROM posts
+         WHERE kind = ?
+           AND platform = ?
+           AND created_at >= ?
+         ORDER BY created_at DESC
+         LIMIT ?
+        """,
+        (kind, platform, cutoff_iso, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 
 def topic_frequency(window_days: int = 7) -> dict[str, int]:
     """Count how many times each LLM-assigned topic has appeared in the last

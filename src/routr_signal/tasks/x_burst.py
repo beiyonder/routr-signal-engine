@@ -1,4 +1,4 @@
-"""X-burst task: draft N standalone X posts and route them by length.
+"""X-burst task: draft N standalone X posts for manual review.
 
 Runs on its own GitHub Actions cron (twice a day; see `pipeline.yml`).
 Independent of the daily-digest flow:
@@ -8,27 +8,21 @@ Independent of the daily-digest flow:
   - Asks the drafter for N standalone X posts via
     `classify/x_burst_drafter.py` + `config/prompts/x_burst.md`.
   - Voice-lints each draft (length cap 25,000; URL check; usual rules)
-    and DROPS any draft that fails. No Discord review, voice_lint is
-    the safety net.
-  - Routes each surviving post by length:
-        text length <= 270 chars   -> Buffer `createPost(shareNow)` to X
-        text length 271 ..  25,000 -> Discord DM to the operator (copy-paste flow)
-        text length >   25,000     -> dropped (X Premium hard cap)
+    and DROPS any draft that fails.
+  - Sends every surviving post to the operator by Discord DM for manual review.
   - Records each post in the `posts` table with platform='x',
-    kind='x_burst', metadata['ship_method'] in {'buffer', 'discord_dm'}.
+    kind='x_burst', metadata['ship_method']='discord_dm'.
 
-Why the split routing: Buffer's GraphQL `createPost` mutation enforces
-X's legacy 280-char cap on this account regardless of the user's X
-Premium status (observed 2026-05-20: `UnexpectedError: Invalid post:
-Twitter / X posts cannot exceed 280 characters`). Until Buffer fixes
-their X-Premium detection, the long-form posts (271-25k) go to the
-operator's Discord DM in a copy-paste-ready code block.
+Why manual review only: the first autonomous bursts repeated the same few
+agent/gateway angles and short posts were going public without the deliberate
+📤 approval gate. Until the content memory and voice quality are proven, this
+lane must never publish directly to X.
 
 What this task does NOT do:
   - Does not fetch from sources (the daily pipeline does that).
   - Does not classify (the daily pipeline does that).
   - Does not write to the Discord digest channel (the daily pipeline does that).
-  - Does not require the 📤 reaction.
+  - Does not publish directly to X.
 
 Run locally:
     routr-burst --count=2 --dry-run
@@ -39,21 +33,21 @@ Environment knobs (all optional):
     ROUTR_X_BURST_MIN_SCORE   float, min combined_score (default 0.55)
     ROUTR_X_BURST_DRY_RUN     "1" to draft + lint but skip publish + DM
     DISCORD_USER_DM_ID        Discord user id of the operator (recipient
-                              of the long-form DM); REQUIRED for any post
-                              over 270 chars to ship anywhere.
+                              of all draft DMs).
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import uuid
 from typing import Any
 
 from ..classify import voice_lint
 from ..classify.x_burst_drafter import draft_x_burst
-from ..lib import buffer_client, discord_inbox, signal_store
-from ..lib.env import env, env_flag, env_required
+from ..lib import discord_inbox, signal_store
+from ..lib.env import env, env_flag
 from ..lib.logging import error, info, warn
 
 
@@ -61,6 +55,8 @@ DEFAULT_COUNT = 2
 DEFAULT_WINDOW_HOURS = 48
 DEFAULT_MIN_SCORE = 0.55
 DEFAULT_SIGNAL_LIMIT = 20
+RECENT_POST_MEMORY_DAYS = 14
+SIMILARITY_DROP_THRESHOLD = 0.34
 
 
 def _run_id() -> str:
@@ -93,14 +89,13 @@ def run(
         f"(count={count} window_h={window_hours} min_score={min_score} dry_run={dry_run}) ==="
     )
 
-    buffer_ok = buffer_client.is_configured()
     dm_user_id = env("DISCORD_USER_DM_ID") or ""
     dm_ok = bool(dm_user_id) and discord_inbox.is_configured()
 
-    if not dry_run and not (buffer_ok or dm_ok):
+    if not dry_run and not dm_ok:
         warn(
-            "routr-burst: neither Buffer nor Discord DM is configured. "
-            "Need at least one. Exiting clean."
+            "routr-burst: Discord DM is not configured. "
+            "Manual-review mode requires DISCORD_USER_DM_ID + bot config. Exiting clean."
         )
         signal_store.close_run(
             run_id,
@@ -113,10 +108,8 @@ def run(
             hooks=None,
         )
         return 0
-    if not buffer_ok:
-        warn("routr-burst: Buffer not configured; short posts (<=270) will be dropped this run")
     if not dm_ok:
-        warn("routr-burst: Discord DM not configured; long posts (>270) will be dropped this run")
+        warn("routr-burst: Discord DM not configured; non-dry-run drafts will be skipped")
 
     # 1. Recent classified signals.
     signals = signal_store.recent_classified_for_drafting(
@@ -148,10 +141,37 @@ def run(
             + ", ".join(f"{t} x{n}" for t, n in top_six)
         )
 
-    # 3. Signals already drafted-against today.
-    excluded = signal_store.signal_ids_posted_today(kind="x_burst", platform="x")
+    # 3. Recent post memory. Avoid same source material and same angle family.
+    excluded = signal_store.signal_ids_posted_since(
+        kind="x_burst",
+        platform="x",
+        days=RECENT_POST_MEMORY_DAYS,
+    )
     if excluded:
-        info(f"routr-burst: excluding {len(excluded)} signal id(s) already drafted today")
+        info(
+            f"routr-burst: excluding {len(excluded)} signal id(s) drafted in "
+            f"last {RECENT_POST_MEMORY_DAYS}d"
+        )
+        signals = [s for s in signals if s.get("id") not in excluded]
+    if not signals:
+        warn("routr-burst: every recent signal was already drafted recently; nothing novel to draft.")
+        signal_store.close_run(
+            run_id,
+            status="empty",
+            source_counts={},
+            cosine_kept={},
+            classifier_relevant={},
+            notes=[f"all candidate signals drafted in last {RECENT_POST_MEMORY_DAYS}d"],
+            digest_md=None,
+            hooks=None,
+        )
+        return 0
+    recent_posts = signal_store.recent_post_texts(
+        kind="x_burst",
+        platform="x",
+        days=RECENT_POST_MEMORY_DAYS,
+        limit=50,
+    )
 
     # 4. Draft.
     posts = draft_x_burst(
@@ -159,6 +179,7 @@ def run(
         count=count,
         topic_frequency=topic_freq,
         excluded_signal_ids=excluded,
+        recent_posts=recent_posts,
     )
     if not posts:
         warn("routr-burst: drafter returned no usable posts; exiting clean.")
@@ -174,7 +195,7 @@ def run(
         )
         return 0
 
-    # 5. Voice-lint. Drop any post that fails.
+    # 5. Voice-lint and novelty-lint. Drop any post that fails.
     lint_results = voice_lint.lint_x_burst_all(posts)
     clean: list[Any] = []
     lint_notes: list[str] = []
@@ -185,6 +206,15 @@ def run(
                 f":: {r.hook.text[:140]!r}"
             )
             lint_notes.append(f"dropped: {', '.join(r.violations)}")
+            continue
+        similar_to = _most_similar_recent_post(r.hook.text, recent_posts)
+        if similar_to is not None:
+            score, post_id = similar_to
+            warn(
+                f"routr-burst: dropping draft due to recent-text similarity "
+                f"score={score:.2f} recent_post={post_id} :: {r.hook.text[:140]!r}"
+            )
+            lint_notes.append(f"dropped: similar_to_recent:{score:.2f}:{post_id}")
             continue
         clean.append(r.hook)
     if not clean:
@@ -201,21 +231,11 @@ def run(
         )
         return 0
 
-    info(f"routr-burst: {len(clean)} of {len(posts)} drafts passed lint; routing by length")
-
-    # Categorize.
-    auto_cap = voice_lint.X_BURST_AUTO_SHIP_CAP
-    short_posts = [h for h in clean if len(h.text) <= auto_cap]
-    long_posts = [h for h in clean if len(h.text) > auto_cap]
-    info(
-        f"routr-burst: routing: {len(short_posts)} <={auto_cap}ch -> Buffer auto; "
-        f"{len(long_posts)} >{auto_cap}ch -> Discord DM"
-    )
+    info(f"routr-burst: {len(clean)} of {len(posts)} drafts passed lint; routing all to Discord DM")
 
     if dry_run:
         info("routr-burst: dry-run, skipping all publish + DM")
-        _record_dry_run(run_id, short_posts, ship_method="buffer")
-        _record_dry_run(run_id, long_posts, ship_method="discord_dm")
+        _record_dry_run(run_id, clean, ship_method="discord_dm_manual_review")
         signal_store.close_run(
             run_id,
             status="dry_run",
@@ -224,111 +244,57 @@ def run(
             classifier_relevant={},
             notes=lint_notes
             + [
-                f"dry_run: would ship {len(short_posts)} short via Buffer, "
-                f"{len(long_posts)} long via Discord DM"
+                f"dry_run: would send {len(clean)} draft(s) via Discord DM for manual review"
             ],
             digest_md=None,
             hooks=[h.to_dict() for h in clean],
         )
         return 0
 
-    # 6. Buffer-ship short posts.
-    buffer_shipped = 0
-    buffer_failed = 0
-    if short_posts:
-        if not buffer_ok:
-            warn(f"routr-burst: dropping {len(short_posts)} short post(s) (Buffer not configured)")
-        else:
-            channel = env_required("BUFFER_X_CHANNEL_ID")
-            for hook in short_posts:
-                post_id = f"post-{uuid.uuid4().hex[:12]}"
-                signal_store.insert_post(
-                    post_id=post_id,
-                    kind="x_burst",
-                    platform="x",
-                    text=hook.text,
-                    status="shipping",
-                    run_id=run_id,
-                    hook_format="x_thread",
-                    signal_id=hook.anchor_signal_id,
-                    metadata={"ship_method": "buffer", "length": len(hook.text)},
-                )
-                try:
-                    created = buffer_client.create_post(
-                        channel_id=channel,
-                        text=hook.text,
-                        mode="shareNow",
-                        scheduling_type="automatic",
-                    )
-                except buffer_client.BufferError as e:
-                    warn(f"routr-burst: Buffer failed for {post_id}: {e}")
-                    signal_store.update_post_status(
-                        post_id,
-                        status="failed",
-                        error=str(e)[:500],
-                    )
-                    buffer_failed += 1
-                    continue
-                signal_store.update_post_status(
-                    post_id,
-                    status="posted",
-                    buffer_post_id=created.id,
-                    posted=True,
-                )
-                info(
-                    f"routr-burst: Buffer ok post={post_id} buffer_post_id={created.id} "
-                    f"signal={hook.anchor_signal_id} len={len(hook.text)}"
-                )
-                buffer_shipped += 1
-
-    # 7. DM long posts.
+    # 6. DM every post. Nothing publishes directly to X from this lane.
     dm_sent = 0
     dm_failed = 0
-    if long_posts:
-        if not dm_ok:
-            warn(f"routr-burst: dropping {len(long_posts)} long post(s) (Discord DM not configured)")
-        else:
-            for hook in long_posts:
-                post_id = f"post-{uuid.uuid4().hex[:12]}"
-                signal_store.insert_post(
-                    post_id=post_id,
-                    kind="x_burst",
-                    platform="x",
-                    text=hook.text,
-                    status="pending_manual",
-                    run_id=run_id,
-                    hook_format="x_thread",
-                    signal_id=hook.anchor_signal_id,
-                    metadata={"ship_method": "discord_dm", "length": len(hook.text)},
-                )
-                header = _build_dm_header(hook, post_id, signals)
-                msg_ids = discord_inbox.send_dm(dm_user_id, hook.text, header=header)
-                if not msg_ids:
-                    warn(f"routr-burst: Discord DM failed for {post_id}")
-                    signal_store.update_post_status(
-                        post_id,
-                        status="failed",
-                        error="Discord DM send failed",
-                    )
-                    dm_failed += 1
-                    continue
+    if not dm_ok:
+        warn(f"routr-burst: dropping {len(clean)} draft(s) (Discord DM not configured)")
+        dm_failed = len(clean)
+    else:
+        for hook in clean:
+            post_id = f"post-{uuid.uuid4().hex[:12]}"
+            signal_store.insert_post(
+                post_id=post_id,
+                kind="x_burst",
+                platform="x",
+                text=hook.text,
+                status="pending_manual",
+                run_id=run_id,
+                hook_format="x_thread",
+                signal_id=hook.anchor_signal_id,
+                metadata={"ship_method": "discord_dm_manual_review", "length": len(hook.text)},
+            )
+            header = _build_dm_header(hook, post_id, signals)
+            msg_ids = discord_inbox.send_dm(dm_user_id, hook.text, header=header)
+            if not msg_ids:
+                warn(f"routr-burst: Discord DM failed for {post_id}")
                 signal_store.update_post_status(
                     post_id,
-                    status="awaiting_manual_post",
+                    status="failed",
+                    error="Discord DM send failed",
                 )
-                info(
-                    f"routr-burst: DM ok post={post_id} msgs={len(msg_ids)} "
-                    f"signal={hook.anchor_signal_id} len={len(hook.text)}"
-                )
-                dm_sent += 1
+                dm_failed += 1
+                continue
+            signal_store.update_post_status(
+                post_id,
+                status="awaiting_manual_post",
+            )
+            info(
+                f"routr-burst: DM ok post={post_id} msgs={len(msg_ids)} "
+                f"signal={hook.anchor_signal_id} len={len(hook.text)}"
+            )
+            dm_sent += 1
 
-    posted_total = buffer_shipped + dm_sent
-    failed_total = buffer_failed + dm_failed
+    failed_total = dm_failed
     notes = list(lint_notes)
-    notes.append(
-        f"buffer_shipped={buffer_shipped} buffer_failed={buffer_failed} "
-        f"dm_sent={dm_sent} dm_failed={dm_failed}"
-    )
+    notes.append(f"manual_review_only=true dm_sent={dm_sent} dm_failed={dm_failed}")
     signal_store.close_run(
         run_id,
         status="success" if failed_total == 0 else "partial",
@@ -341,8 +307,7 @@ def run(
     )
 
     info(
-        f"=== routr-burst complete: buffer={buffer_shipped}/{buffer_shipped + buffer_failed} "
-        f"dm={dm_sent}/{dm_sent + dm_failed} total_ok={posted_total} ==="
+        f"=== routr-burst complete: manual_review_dm={dm_sent}/{dm_sent + dm_failed} ==="
     )
     return 0 if failed_total == 0 else 2
 
@@ -352,7 +317,7 @@ def _record_dry_run(run_id: str, hooks: list[Any], *, ship_method: str) -> None:
         post_id = f"post-{uuid.uuid4().hex[:12]}"
         signal_store.insert_post(
             post_id=post_id,
-            kind="x_burst",
+            kind="x_burst_dry_run",
             platform="x",
             text=hook.text,
             status="dry_run",
@@ -383,6 +348,47 @@ def _build_dm_header(hook: Any, post_id: str, signals: list[dict[str, Any]]) -> 
     if hook.anchor_signal_id:
         lines.append(f"Signal id: `{hook.anchor_signal_id}`")
     return "\n".join(lines)
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_'-]{2,}", re.IGNORECASE)
+_STOPWORDS = {
+    "about", "after", "again", "against", "agent", "agents", "because", "being",
+    "between", "could", "every", "from", "have", "into", "just", "like", "more",
+    "most", "much", "need", "needs", "only", "people", "post", "posts", "same",
+    "should", "system", "systems", "that", "their", "there", "these", "they", "this",
+    "through", "when", "where", "which", "while", "with", "without", "would", "your",
+}
+
+
+def _text_tokens(text: str) -> set[str]:
+    return {t.lower().strip("'_") for t in _TOKEN_RE.findall(text) if t.lower() not in _STOPWORDS}
+
+
+def _similarity(a: str, b: str) -> float:
+    ta = _text_tokens(a)
+    tb = _text_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _most_similar_recent_post(
+    text: str,
+    recent_posts: list[dict[str, Any]],
+) -> tuple[float, str] | None:
+    best_score = 0.0
+    best_id = ""
+    for post in recent_posts:
+        prior = str(post.get("text") or "")
+        if not prior:
+            continue
+        score = _similarity(text, prior)
+        if score > best_score:
+            best_score = score
+            best_id = str(post.get("id") or post.get("signal_id") or "unknown")
+    if best_score >= SIMILARITY_DROP_THRESHOLD:
+        return (best_score, best_id)
+    return None
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -190,8 +190,9 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # X_BURST: draft 2 standalone X posts from recent signals and auto-ship.
-  # No Discord review; voice_lint is the safety net.
+  # X_BURST: draft standalone X posts from recent signals and DM for review.
+  # Nothing in this lane auto-ships to X anymore; prior autonomous short-post
+  # shipping saturated into repetitive, toy-example content.
   #
   # `needs: [daily]` so that when both jobs are triggered by the 02:30 UTC
   # cron, x_burst runs AFTER daily finishes refreshing the DB. The
