@@ -1303,6 +1303,55 @@ def check_discord_dump_links() -> None:
     check("extract_links_from_message excludes private/media URLs", all("discord" not in u for u in canon))
 
 
+def check_discord_dump_crawl_queue() -> None:
+    section("[15d] Discord dump bounded crawl queue")
+
+    try:
+        from routr_signal.discord_dump.crawl_queue import CrawlLimits, build_crawl_queue
+        from routr_signal.discord_dump.types import ExtractedLink
+    except Exception as e:  # noqa: BLE001
+        check("discord_dump crawl queue imports", False, str(e))
+        return
+
+    def link(url: str, message_id: str, domain_class: str = "web") -> ExtractedLink:
+        return ExtractedLink(
+            raw_url=url,
+            canonical_url=url,
+            source_message_id=message_id,
+            source_field="content",
+            domain_class=domain_class,  # type: ignore[arg-type]
+            crawl_eligible=True,
+        )
+
+    links = [
+        link("https://example.com/a", "m1"),
+        link("https://example.com/b", "m1"),
+        link("https://other.com/c", "m1"),
+        link("https://third.com/d", "m1"),
+        link("https://github.com/o/r1", "m2", "github"),
+        link("https://github.com/o/r2", "m3", "github"),
+        link("https://github.com/o/r3", "m4", "github"),
+        link("https://x.com/i/status/1", "m5", "x"),
+        link("https://x.com/i/status/2", "m6", "x"),
+        link("https://youtube.com/watch?v=a", "m7", "youtube"),
+    ]
+    limits = CrawlLimits(
+        max_urls=5,
+        max_urls_per_message=2,
+        max_urls_per_domain_per_message=1,
+        default_domain_cap=1,
+        domain_caps={"github.com": 2, "x.com": 1, "youtube.com": 1},
+    )
+    queue = build_crawl_queue(links, limits=limits)
+    queued = [item.link.canonical_url for item in queue]
+    check("crawl queue respects global cap", len(queue) == 5)
+    check("crawl queue caps URLs per message", sum(1 for item in queue if item.link.source_message_id == "m1") == 2)
+    check("crawl queue caps same domain per message", not ({"https://example.com/a", "https://example.com/b"} <= set(queued)))
+    check("crawl queue applies domain-specific GitHub cap", sum(1 for item in queue if item.domain == "github.com") == 2)
+    check("crawl queue applies X cap", sum(1 for item in queue if item.domain == "x.com") == 1)
+    check("crawl queue is deterministic", queued == [item.link.canonical_url for item in build_crawl_queue(links, limits=limits)])
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -1328,6 +1377,7 @@ def main() -> int:
     check_discord_dump_private_guardrails()
     check_discord_dump_loader()
     check_discord_dump_links()
+    check_discord_dump_crawl_queue()
 
     # ----- Live idempotence ------
     try:
