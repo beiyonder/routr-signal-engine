@@ -16,6 +16,7 @@ class CrawlLimits:
     max_urls_per_domain_per_message: int = 1
     default_domain_cap: int = 2
     domain_caps: dict[str, int] = field(default_factory=dict)
+    class_caps: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,7 @@ def build_crawl_queue(
     message_counts: dict[str, int] = defaultdict(int)
     message_domain_counts: dict[tuple[str, str], int] = defaultdict(int)
     domain_counts: dict[str, int] = defaultdict(int)
+    class_counts: dict[str, int] = defaultdict(int)
 
     for link in sorted(links, key=_sort_key):
         if len(selected) >= active_limits.max_urls:
@@ -68,6 +70,9 @@ def build_crawl_queue(
         domain_cap = active_limits.domain_caps.get(domain, active_limits.default_domain_cap)
         if domain_counts[domain] >= domain_cap:
             continue
+        class_cap = active_limits.class_caps.get(link.domain_class)
+        if class_cap is not None and class_counts[link.domain_class] >= class_cap:
+            continue
 
         item = CrawlQueueItem(link=link, domain=domain, priority=_priority(link))
         selected.append(item)
@@ -75,6 +80,7 @@ def build_crawl_queue(
         message_counts[link.source_message_id] += 1
         message_domain_counts[msg_domain_key] += 1
         domain_counts[domain] += 1
+        class_counts[link.domain_class] += 1
 
     return selected
 

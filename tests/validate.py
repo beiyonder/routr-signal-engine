@@ -1334,6 +1334,8 @@ def check_discord_dump_crawl_queue() -> None:
         link("https://x.com/i/status/1", "m5", "x"),
         link("https://x.com/i/status/2", "m6", "x"),
         link("https://youtube.com/watch?v=a", "m7", "youtube"),
+        link("https://twitter.com/u/status/3", "m8", "x"),
+        link("https://fxtwitter.com/u/status/4", "m9", "x"),
     ]
     limits = CrawlLimits(
         max_urls=5,
@@ -1341,6 +1343,7 @@ def check_discord_dump_crawl_queue() -> None:
         max_urls_per_domain_per_message=1,
         default_domain_cap=1,
         domain_caps={"github.com": 2, "x.com": 1, "youtube.com": 1},
+        class_caps={"x": 1},
     )
     queue = build_crawl_queue(links, limits=limits)
     queued = [item.link.canonical_url for item in queue]
@@ -1348,7 +1351,7 @@ def check_discord_dump_crawl_queue() -> None:
     check("crawl queue caps URLs per message", sum(1 for item in queue if item.link.source_message_id == "m1") == 2)
     check("crawl queue caps same domain per message", not ({"https://example.com/a", "https://example.com/b"} <= set(queued)))
     check("crawl queue applies domain-specific GitHub cap", sum(1 for item in queue if item.domain == "github.com") == 2)
-    check("crawl queue applies X cap", sum(1 for item in queue if item.domain == "x.com") == 1)
+    check("crawl queue applies X class cap across URL variants", sum(1 for item in queue if item.link.domain_class == "x") == 1)
     check("crawl queue is deterministic", queued == [item.link.canonical_url for item in build_crawl_queue(links, limits=limits)])
 
 
