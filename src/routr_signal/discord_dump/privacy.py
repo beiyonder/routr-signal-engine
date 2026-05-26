@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)")
 _DISCORD_INVITE_RE = re.compile(r"https?://(?:www\.)?(?:discord\.gg|discord\.com/invite)/\S+", re.I)
+_SOURCE_SPECIFIC_COMMUNITY_RE = re.compile(r"\b" + "latent" + r"[\s.-]*" + "space" + r"\b", re.I)
 _BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.I)
 _SECRET_TOKEN_RE = re.compile(
     r"\b(?:sk|pk|ghp|gho|xox[baprs]?|discord)[-_][A-Za-z0-9._~+/=-]{6,}\b",
@@ -42,6 +43,7 @@ def redact_sensitive_text(text: str) -> str:
     redacted = _EMAIL_RE.sub("[redacted-email]", text)
     redacted = _PHONE_RE.sub("[redacted-phone]", redacted)
     redacted = _DISCORD_INVITE_RE.sub("[redacted-discord-invite]", redacted)
+    redacted = _SOURCE_SPECIFIC_COMMUNITY_RE.sub("[redacted-community]", redacted)
     redacted = _BEARER_RE.sub("Bearer [redacted-token]", redacted)
     redacted = _SECRET_TOKEN_RE.sub("[redacted-secret]", redacted)
     return _URL_RE.sub(lambda m: _redact_url(m.group(0)), redacted)

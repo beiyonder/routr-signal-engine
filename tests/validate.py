@@ -1197,7 +1197,8 @@ def check_discord_dump_private_guardrails() -> None:
     sample = (
         "email me at founder@example.com or call +1 415 555 1212. "
         "invite https://discord.gg/private-room token Bearer sk-secret "
-        "url https://example.com/path?utm_source=x&token=secret&keep=1"
+        "url https://example.com/path?utm_source=x&token=secret&keep=1 "
+        "community " + "latent" + " " + "space" + " and https://" + "latent" + "." + "space/feed"
     )
     redacted = redact_sensitive_text(sample)
     check("privacy redactor removes email addresses", "founder@example.com" not in redacted)
@@ -1205,6 +1206,7 @@ def check_discord_dump_private_guardrails() -> None:
     check("privacy redactor removes Discord invites", "discord.gg/private-room" not in redacted)
     check("privacy redactor removes bearer/token-looking secrets", "sk-secret" not in redacted)
     check("privacy redactor strips sensitive URL query values", "token=secret" not in redacted)
+    check("privacy redactor removes source-specific community names", "latent" not in redacted.lower())
 
 
 def check_discord_dump_loader() -> None:
@@ -1355,6 +1357,91 @@ def check_discord_dump_crawl_queue() -> None:
     check("crawl queue is deterministic", queued == [item.link.canonical_url for item in build_crawl_queue(links, limits=limits)])
 
 
+def check_discord_dump_enrichment_fallbacks() -> None:
+    section("[15e] Discord dump enrichment safe fallbacks")
+
+    try:
+        from routr_signal.discord_dump.crawl_queue import CrawlQueueItem
+        from routr_signal.discord_dump.enrich import (
+            crawl_result_from_embed,
+            enrich_live,
+            enrich_dry_run,
+            summarize_enrichment_health,
+            x_blocked_fallback,
+            youtube_transcript_unavailable,
+        )
+        from routr_signal.discord_dump.types import CrawlResult, ExtractedLink
+    except Exception as e:  # noqa: BLE001
+        check("discord_dump enrichment helpers import", False, str(e))
+        return
+
+    x_link = ExtractedLink(
+        raw_url="https://twitter.com/u/status/1",
+        canonical_url="https://x.com/i/status/1",
+        source_message_id="m1",
+        source_field="content",
+        domain_class="x",
+        crawl_eligible=True,
+    )
+    embed = {
+        "url": "https://twitter.com/u/status/1",
+        "title": "Useful launch",
+        "description": "Contact me at founder@example.com about the launch.",
+        "content_type": "text/html",
+    }
+    from_embed = crawl_result_from_embed(x_link, embed)
+    check("embed fallback returns CrawlResult", isinstance(from_embed, CrawlResult))
+    check("embed fallback keeps canonical URL", from_embed.canonical_url == "https://x.com/i/status/1")
+    check("embed fallback redacts sensitive text", "founder@example.com" not in from_embed.text)
+    check("embed fallback records text hash", bool(from_embed.text_hash))
+
+    x_fallback = x_blocked_fallback(x_link, embed=embed, reason="blocked by login")
+    check("X blocked fallback marks failed status", x_fallback.status == "failed")
+    check("X blocked fallback records failure reason", "blocked by login" in (x_fallback.failure_reason or ""))
+    check("X blocked fallback preserves embed text", "Useful launch" in x_fallback.text)
+
+    yt_link = ExtractedLink(
+        raw_url="https://youtu.be/abc123",
+        canonical_url="https://youtube.com/watch?v=abc123",
+        source_message_id="m2",
+        source_field="embed.url",
+        domain_class="youtube",
+        crawl_eligible=True,
+    )
+    yt_fallback = youtube_transcript_unavailable(
+        yt_link,
+        embed={"title": "Demo video", "description": "Transcript is not available."},
+    )
+    check("YouTube transcript fallback is non-fatal", yt_fallback.status == "metadata_only")
+    check("YouTube transcript fallback records reason", "transcript unavailable" in (yt_fallback.failure_reason or ""))
+
+    dry = enrich_dry_run([CrawlQueueItem(link=x_link, domain="x.com", priority=35)])
+    check("dry-run enrichment returns one result per queue item", len(dry) == 1)
+    check("dry-run enrichment makes no live fetch", dry[0].status == "skipped" and "dry run" in (dry[0].failure_reason or ""))
+
+    web_link = ExtractedLink(
+        raw_url="https://example.com/post",
+        canonical_url="https://example.com/post",
+        source_message_id="m3",
+        source_field="content",
+        domain_class="web",
+        crawl_eligible=True,
+    )
+    attempted: list[str] = []
+
+    def fake_fetch(url: str) -> tuple[str, str, bool]:
+        attempted.append(url)
+        return "text/html", "<html><title>Fetched</title><body>Actual page text</body></html>", False
+
+    live = enrich_live([CrawlQueueItem(link=web_link, domain="example.com", priority=40)], fetcher=fake_fetch)
+    check("live enrichment attempts fetch before fallback", attempted == ["https://example.com/post"])
+    check("live enrichment returns fetched result", live[0].status == "fetched" and "Actual page text" in live[0].text)
+
+    fallback_health = summarize_enrichment_health([x_fallback, yt_fallback, dry[0]], max_fallback_rate=0.5)
+    check("enrichment health flags excessive fallback", not fallback_health["healthy"])
+    check("enrichment health reports fallback rate", fallback_health["fallback_rate"] == 1.0)
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -1381,6 +1468,7 @@ def main() -> int:
     check_discord_dump_loader()
     check_discord_dump_links()
     check_discord_dump_crawl_queue()
+    check_discord_dump_enrichment_fallbacks()
 
     # ----- Live idempotence ------
     try:

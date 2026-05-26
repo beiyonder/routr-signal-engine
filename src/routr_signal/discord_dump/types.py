@@ -61,6 +61,21 @@ class ExtractedLink:
 
 
 @dataclass(slots=True)
+class CrawlResult:
+    source_url: str
+    canonical_url: str
+    source_message_id: str
+    domain_class: DomainClass
+    status: str
+    content_type: str | None = None
+    title: str | None = None
+    text: str = ""
+    text_hash: str | None = None
+    truncated: bool = False
+    failure_reason: str | None = None
+
+
+@dataclass(slots=True)
 class LoadStats:
     files_seen: int = 0
     records_seen: int = 0
