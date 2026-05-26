@@ -7,10 +7,6 @@
 # Each feed is identified by `name`; the dedupe id is "newsletter-<sha1(url)>".
 
 feeds:
-  - name: latent-space
-    url: https://www.latent.space/feed
-    max_items_per_run: 10
-
   # The Batch (deeplearning.ai) does not expose an RSS feed on the new
   # thebatch.ai SPA as of 2026-05-17. Treat as manual paste-in if needed.
 

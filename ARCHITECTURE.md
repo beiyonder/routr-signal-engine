@@ -26,7 +26,7 @@ LLM cost target: **<$10/month**.
 | X / Twitter      | live   | Playwright + imported cookies                                            | session cookie jar    | `config/twitter_watch.yaml`     |
 | Discord (manual) | live   | parse `data/manual/discord-pastes/*.md`                                  | none                  | n/a (paste-in)                  |
 | HF Papers        | live   | `huggingface.co/api/daily_papers`                                        | none                  | `config/hf_papers.yaml`         |
-| Newsletters      | live   | RSS bundle: Latent Space, The Batch, Import AI, Simon Willison, ...      | none                  | `config/newsletters.yaml`       |
+| Newsletters      | live   | RSS bundle: curated AI newsletters and technical blogs                   | none                  | `config/newsletters.yaml`       |
 | Dev.to           | future | `dev.to/feed/tag/<tag>`                                                  | none                  |                                 |
 
 Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `Helicone/helicone`, `maximhq/bifrost`. Edit `config/github_repos.yaml` to extend.

@@ -270,7 +270,7 @@ commit step skips with "No data/ changes to commit." Not a bug.
 | HF Papers        | `sources/hf_papers.py`                    | none (huggingface.co/api endpoint)  | ~30 items / run   |
 | Newsletters      | `sources/newsletters.py`                  | none (RSS bundle)                   | ~50 items / run   |
 
-### Discord paste-in (Latent Space and others)
+### Discord paste-in
 
 Discord aggressively bans accounts that automate against their API. Rather than
 risk a burner-ban every few weeks, paste interesting Discord threads into

@@ -35,7 +35,7 @@ users:
   # LLM-infra builders and writers
   - simonw           # Simon Willison
   - HamelHusain      # LLM evals
-  - swyx             # Latent Space / AI Engineer
+  - swyx             # AI Engineer
   - jeremyphoward    # fast.ai
   - karpathy
   - hwchase17        # LangChain CEO

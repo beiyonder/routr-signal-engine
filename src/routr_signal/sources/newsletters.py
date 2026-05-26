@@ -5,8 +5,8 @@ via `feedparser`. Each item is identified by `newsletter-<sha1(url)[:12]>` so
 re-runs over the same feed item are idempotent.
 
 Why this source:
-    Newsletter writers (Latent Space, The Batch, Import AI, Simon Willison,
-    Hamel Husain, ...) curate signal for us before we even see it. High SNR.
+    Newsletter writers and technical bloggers curate signal for us before we
+    even see it. High SNR.
     The cosine prefilter then ranks how on-topic each issue is against our
     LLMOps anchors.
 

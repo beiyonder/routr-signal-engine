@@ -108,6 +108,6 @@ anchors:
 
   - topic: community
     text: >
-      llm infrastructure community discussion, latent space ai engineer discord
+      llm infrastructure community discussion, ai engineering discord
       threads, llmops practitioners debating architecture choices
     weight: 0.9

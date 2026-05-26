@@ -2,12 +2,12 @@
 
 Discord aggressively bans accounts that automate against their API or DOM. We
 side-step the ToS risk entirely: paste interesting messages from any Discord
-channel (Latent Space, AI Engineer, etc.) into markdown files under
+channel into markdown files under
 `data/manual/discord-pastes/` and the pipeline ingests them on the next run.
 
 Expected markdown file shape (one file per channel-per-day works well):
 
-    # latent-space / general / 2026-05-15
+    # ai-community / general / 2026-05-15
 
     @username  https://discord.com/channels/SERVER/CHANNEL/MSG_ID
         First message body. Indented so we know where it starts.

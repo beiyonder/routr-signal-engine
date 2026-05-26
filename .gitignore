@@ -59,6 +59,7 @@ data/digests/
 data/raw/
 data/seen/
 data/leads/
+data/private/
 data/intel.db
 data/intel.db-shm
 data/intel.db-wal

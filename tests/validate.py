@@ -1181,6 +1181,128 @@ def check_x_watch_surface() -> None:
     check("pipeline.yml workflow_dispatch task choices include x_watch", "x_watch" in pipeline_yml)
 
 
+def check_discord_dump_private_guardrails() -> None:
+    section("[15] Discord dump private analysis guardrails")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
+    check(".gitignore blocks private Discord dump artifacts", "data/private/" in gitignore)
+
+    try:
+        from routr_signal.discord_dump.privacy import redact_sensitive_text
+    except Exception as e:  # noqa: BLE001
+        check("discord_dump privacy redactor imports", False, str(e))
+        return
+
+    sample = (
+        "email me at founder@example.com or call +1 415 555 1212. "
+        "invite https://discord.gg/private-room token Bearer sk-secret "
+        "url https://example.com/path?utm_source=x&token=secret&keep=1"
+    )
+    redacted = redact_sensitive_text(sample)
+    check("privacy redactor removes email addresses", "founder@example.com" not in redacted)
+    check("privacy redactor removes phone-like values", "415 555 1212" not in redacted)
+    check("privacy redactor removes Discord invites", "discord.gg/private-room" not in redacted)
+    check("privacy redactor removes bearer/token-looking secrets", "sk-secret" not in redacted)
+    check("privacy redactor strips sensitive URL query values", "token=secret" not in redacted)
+
+
+def check_discord_dump_loader() -> None:
+    section("[15b] Discord dump loader and normalizer")
+
+    try:
+        from routr_signal.discord_dump.loader import normalize_record
+        from routr_signal.discord_dump.types import NormalizedLeadRecord, NormalizedMessage
+    except Exception as e:  # noqa: BLE001
+        check("discord_dump loader imports", False, str(e))
+        return
+
+    discord_row = {
+        "id": "1506705673617145968",
+        "channel_id": "1209672547642249216",
+        "content": "Shipping a useful agent eval writeup https://example.com/evals?utm_source=x",
+        "timestamp": "2026-05-20T17:10:25.828000+00:00",
+        "author": {"id": "718221565371744377", "username": "builder", "global_name": "Builder"},
+        "embeds": [{"url": "https://example.com/evals", "title": "Agent evals"}],
+        "thread": {"id": "thread-1", "name": "Agent evals"},
+        "attachments": [{"url": "https://cdn.discordapp.com/file.png", "content_type": "image/png"}],
+    }
+    normalized = normalize_record(discord_row, source_file="sample/page-1.json")
+    check("Discord message normalizes to NormalizedMessage", isinstance(normalized, NormalizedMessage))
+    if isinstance(normalized, NormalizedMessage):
+        check("Discord message preserves message id", normalized.message_id == "1506705673617145968")
+        check("Discord message preserves real handle", normalized.author_username == "builder")
+        check("Discord message captures thread id", normalized.thread_id == "thread-1")
+        check("Discord message captures embed metadata", normalized.embeds[0].get("title") == "Agent evals")
+        check("Discord message records source file", normalized.source_file == "sample/page-1.json")
+
+    lead_row = {
+        "repo_full_name": "owner/project",
+        "owner": "owner",
+        "html_url": "https://github.com/owner/project",
+        "lead_score": 0.82,
+    }
+    lead = normalize_record(lead_row, source_file="sample/leads.json")
+    check("non-Discord lead normalizes to NormalizedLeadRecord", isinstance(lead, NormalizedLeadRecord))
+    if isinstance(lead, NormalizedLeadRecord):
+        check("lead record keeps source file", lead.source_file == "sample/leads.json")
+        check("lead record keeps original keys", "repo_full_name" in lead.raw)
+
+
+def check_discord_dump_links() -> None:
+    section("[15c] Discord dump URL canonicalization and policy")
+
+    try:
+        from routr_signal.discord_dump.links import (
+            canonicalize_url,
+            classify_domain,
+            extract_links_from_message,
+            is_crawl_eligible,
+        )
+        from routr_signal.discord_dump.types import NormalizedMessage
+    except Exception as e:  # noqa: BLE001
+        check("discord_dump link helpers import", False, str(e))
+        return
+
+    check(
+        "X status URLs canonicalize across hosts",
+        canonicalize_url("https://twitter.com/swyx/status/123?s=20") == "https://x.com/i/status/123",
+    )
+    check(
+        "YouTube watch URLs canonicalize to video id",
+        canonicalize_url("https://www.youtube.com/watch?v=abc123&utm_source=x") == "https://youtube.com/watch?v=abc123",
+    )
+    check(
+        "arXiv PDFs canonicalize to abs page",
+        canonicalize_url("https://arxiv.org/pdf/2401.12345v2.pdf") == "https://arxiv.org/abs/2401.12345",
+    )
+    check(
+        "GitHub URLs strip tracking and trailing slash",
+        canonicalize_url("https://github.com/Owner/Repo/?utm_source=x") == "https://github.com/Owner/Repo",
+    )
+    check("Discord private channel URLs are not crawl eligible", not is_crawl_eligible("https://discord.com/channels/1/2/3"))
+    check("Discord CDN assets are not crawl eligible", not is_crawl_eligible("https://cdn.discordapp.com/file.png"))
+    check("image assets are not crawl eligible", not is_crawl_eligible("https://example.com/og-image.jpg"))
+    check("blog pages are crawl eligible", is_crawl_eligible("https://example.com/post"))
+    check("X status domain class is x", classify_domain("https://x.com/i/status/123") == "x")
+    check("YouTube domain class is youtube", classify_domain("https://youtu.be/abc123") == "youtube")
+
+    msg = NormalizedMessage(
+        message_id="m1",
+        channel_id="c1",
+        content="Read https://example.com/post?utm_source=x and https://discord.gg/private",
+        timestamp=None,
+        source_file="sample.json",
+        embeds=[{"url": "https://youtu.be/abc123", "title": "Demo"}],
+        attachments=[{"url": "https://cdn.discordapp.com/file.png"}],
+    )
+    links = extract_links_from_message(msg)
+    canon = {link.canonical_url for link in links}
+    check("extract_links_from_message includes content URL", "https://example.com/post" in canon)
+    check("extract_links_from_message includes embed URL", "https://youtube.com/watch?v=abc123" in canon)
+    check("extract_links_from_message excludes private/media URLs", all("discord" not in u for u in canon))
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -1203,6 +1325,9 @@ def main() -> int:
     check_hook_source_link()
     check_x_burst_surface()
     check_x_watch_surface()
+    check_discord_dump_private_guardrails()
+    check_discord_dump_loader()
+    check_discord_dump_links()
 
     # ----- Live idempotence ------
     try:
