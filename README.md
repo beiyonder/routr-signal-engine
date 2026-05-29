@@ -1,6 +1,6 @@
 # signal-engine
 
-A personal daily signal aggregator. Fetches discussions from Hacker News, Reddit, public GitHub issues, X/Twitter, and manually-pasted Discord threads. A small classifier LLM scores each item for relevance, a larger drafter LLM writes a few post hooks, and the digest lands in a Discord channel every morning at **07:00 UTC**.
+A personal daily signal aggregator. Fetches discussions from Hacker News, Reddit, public GitHub issues, X/Twitter, and manually-pasted Discord threads. A small classifier LLM scores each item for relevance.
 
 Two-layer relevance: a deterministic cosine-similarity prefilter against curated topic anchors drops ~50% of items before any LLM call, then the classifier handles the rest. Items are attributed to authors and aggregated across sources over time.
 
