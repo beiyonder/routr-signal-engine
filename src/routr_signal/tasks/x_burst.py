@@ -57,6 +57,7 @@ DEFAULT_MIN_SCORE = 0.55
 DEFAULT_SIGNAL_LIMIT = 20
 RECENT_POST_MEMORY_DAYS = 14
 SIMILARITY_DROP_THRESHOLD = 0.34
+X_BURST_DISPATCH_CAP = voice_lint.X_BURST_AUTO_SHIP_CAP
 
 
 def _run_id() -> str:
@@ -90,7 +91,7 @@ def run(
     )
 
     dm_user_id = env("DISCORD_USER_DM_ID") or ""
-    dm_ok = bool(dm_user_id) and discord_inbox.is_configured()
+    dm_ok = bool(dm_user_id) and discord_inbox.is_dm_configured()
 
     if not dry_run and not dm_ok:
         warn(
@@ -251,30 +252,32 @@ def run(
         )
         return 0
 
-    # 6. DM every post. Nothing publishes directly to X from this lane.
+    # 6. DM every post. Short Buffer-safe posts can be approved from the DM
+    # with 📤 and dispatched by routr-dispatch; long-form remains manual-only.
     dm_sent = 0
     dm_failed = 0
+    dispatch_refs: list[str] = []
     if not dm_ok:
         warn(f"routr-burst: dropping {len(clean)} draft(s) (Discord DM not configured)")
         dm_failed = len(clean)
     else:
         for hook in clean:
             post_id = f"post-{uuid.uuid4().hex[:12]}"
-            signal_store.insert_post(
-                post_id=post_id,
-                kind="x_burst",
-                platform="x",
-                text=hook.text,
-                status="pending_manual",
-                run_id=run_id,
-                hook_format="x_thread",
-                signal_id=hook.anchor_signal_id,
-                metadata={"ship_method": "discord_dm_manual_review", "length": len(hook.text)},
-            )
             header = _build_dm_header(hook, post_id, signals)
-            msg_ids = discord_inbox.send_dm(dm_user_id, hook.text, header=header)
-            if not msg_ids:
+            dm_result = discord_inbox.send_dm_with_channel(dm_user_id, hook.text, header=header)
+            if not dm_result:
                 warn(f"routr-burst: Discord DM failed for {post_id}")
+                signal_store.insert_post(
+                    post_id=post_id,
+                    kind="x_burst",
+                    platform="x",
+                    text=hook.text,
+                    status="failed",
+                    run_id=run_id,
+                    hook_format="x_thread",
+                    signal_id=hook.anchor_signal_id,
+                    metadata={"ship_method": "discord_dm_failed", "length": len(hook.text)},
+                )
                 signal_store.update_post_status(
                     post_id,
                     status="failed",
@@ -282,15 +285,55 @@ def run(
                 )
                 dm_failed += 1
                 continue
-            signal_store.update_post_status(
-                post_id,
-                status="awaiting_manual_post",
-            )
+            dm_channel_id, msg_ids = dm_result
+            is_dispatchable = len(hook.text) <= X_BURST_DISPATCH_CAP
+            dispatch_refs.extend(f"{dm_channel_id}:{mid}" for mid in msg_ids)
+            if is_dispatchable:
+                signal_store.insert_post(
+                    post_id=post_id,
+                    kind="x_burst",
+                    platform="x",
+                    text=hook.text,
+                    status="pending",
+                    run_id=run_id,
+                    hook_format="x_thread",
+                    signal_id=hook.anchor_signal_id,
+                    metadata={
+                        "ship_method": "discord_dm_approval_to_buffer",
+                        "length": len(hook.text),
+                        "discord_channel_id": dm_channel_id,
+                        "discord_message_ids": msg_ids,
+                    },
+                )
+            else:
+                signal_store.insert_post(
+                    post_id=post_id,
+                    kind="x_burst",
+                    platform="x",
+                    text=hook.text,
+                    status="pending_manual",
+                    run_id=run_id,
+                    hook_format="x_thread",
+                    signal_id=hook.anchor_signal_id,
+                    metadata={
+                        "ship_method": "discord_dm_manual_review",
+                        "length": len(hook.text),
+                        "discord_channel_id": dm_channel_id,
+                        "discord_message_ids": msg_ids,
+                    },
+                )
+                signal_store.update_post_status(
+                    post_id,
+                    status="awaiting_manual_post",
+                )
             info(
                 f"routr-burst: DM ok post={post_id} msgs={len(msg_ids)} "
                 f"signal={hook.anchor_signal_id} len={len(hook.text)}"
             )
             dm_sent += 1
+
+    if dispatch_refs:
+        signal_store.record_run_discord_messages(run_id, dispatch_refs)
 
     failed_total = dm_failed
     notes = list(lint_notes)

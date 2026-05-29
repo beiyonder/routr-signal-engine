@@ -227,6 +227,14 @@ def is_configured() -> bool:
         return False
 
 
+def is_dm_configured() -> bool:
+    try:
+        env_required("DISCORD_BOT_TOKEN")
+        return True
+    except Exception:
+        return False
+
+
 
 # ---------------------------------------------------------------------------
 # Direct Messages (DMs to a specific user)
@@ -383,9 +391,22 @@ def send_dm(
     total failure.
     """
 
+    result = send_dm_with_channel(user_id, body, header=header, code_block=code_block)
+    return result[1] if result else []
+
+
+def send_dm_with_channel(
+    user_id: str,
+    body: str,
+    *,
+    header: str | None = None,
+    code_block: bool = True,
+) -> tuple[str, list[str]] | None:
+    """DM `body` and return the DM channel id plus sent message ids."""
+
     dm_channel = _open_dm_channel(user_id)
     if not dm_channel:
-        return []
+        return None
 
     msg_ids: list[str] = []
 
@@ -412,7 +433,7 @@ def send_dm(
         else:
             warn(f"discord: send_dm chunk {i}/{total} failed; aborting remaining chunks")
             break
-    return msg_ids
+    return (dm_channel, msg_ids) if msg_ids else None
 
 
 

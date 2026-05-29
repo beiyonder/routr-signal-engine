@@ -38,6 +38,7 @@ routr-synthesize  = "routr_signal.tasks.weekly_synthesis:cli"
 routr-dispatch    = "routr_signal.tasks.dispatch_approved:cli"
 routr-burst       = "routr_signal.tasks.x_burst:cli"
 routr-x-watch     = "routr_signal.tasks.x_watch:cli"
+routr-discord-dump-analyze = "routr_signal.tasks.discord_dump_analyze:cli"
 
 [build-system]
 requires = ["hatchling"]

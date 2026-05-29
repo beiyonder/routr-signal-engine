@@ -7,7 +7,8 @@ Flow per poll:
   1. Read recent runs that have discord_message_ids recorded.
   2. For each message on each run, check whether the user reacted with the
      approval emoji for that run's kind:
-       - kind='daily':     ✅  -> post pending x_thread hook via Buffer
+        - kind='daily':     📤  -> post pending x_thread hook via Buffer
+        - kind='x_burst':   📤  -> post approved short burst via Buffer
        - kind='synthesis': 📰  -> push synthesis draft to Beehiiv as draft
   3. After a successful dispatch, the bot adds 🚀 (processed marker) to the
      message so subsequent polls skip it.
@@ -83,6 +84,8 @@ def run() -> int:
 
         if kind == "daily":
             n_p, n_f, n_s = _handle_daily_run(channel_id, r, msg_ids)
+        elif kind == "x_burst":
+            n_p, n_f, n_s = _handle_x_burst_run(r, msg_ids)
         elif kind == "synthesis":
             n_p, n_f, n_s = _handle_synthesis_run(channel_id, r, msg_ids)
         else:
@@ -205,6 +208,83 @@ def _handle_daily_run(
     return (processed, failed, 0)
 
 
+def _handle_x_burst_run(
+    run_row: dict[str, Any],
+    msg_refs: list[str],
+) -> tuple[int, int, int]:
+    """Dispatch short X-burst posts approved from their Discord DM."""
+
+    run_id = run_row["id"]
+    pending = signal_store.pending_posts_for_run(run_id)
+    if not pending:
+        return (0, 0, 0)
+    if not buffer_client.is_configured():
+        warn(f"dispatch_approved[x_burst/{run_id}]: Buffer not configured; cannot dispatch")
+        return (0, 0, len(pending))
+
+    msg_snapshots: dict[tuple[str, str], dict[str, Any]] = {}
+    for ref in msg_refs:
+        parsed = _parse_message_ref(ref)
+        if parsed is None:
+            continue
+        ch_id, mid = parsed
+        try:
+            snap = discord_inbox.get_message(ch_id, mid)
+        except discord_inbox.DiscordError as e:
+            warn(f"dispatch_approved[x_burst/{run_id}]: get_message {mid} failed: {e}")
+            continue
+        if snap:
+            msg_snapshots[(ch_id, mid)] = snap
+
+    if not msg_snapshots:
+        return (0, 0, len(pending))
+    if any(_has_emoji_from_self(snap, BOT_PROCESSED_MARKER) for snap in msg_snapshots.values()):
+        return (0, 0, len(pending))
+
+    triggering_emoji = _scan_for_approval(msg_snapshots.values(), HOOK_APPROVAL_EMOJIS)
+    if triggering_emoji is None:
+        return (0, 0, len(pending))
+
+    processed = 0
+    failed = 0
+    channel = env_required("BUFFER_X_CHANNEL_ID")
+    for p in pending:
+        if p["kind"] != "x_burst" or p["platform"] != "x":
+            continue
+        try:
+            created = buffer_client.create_post(
+                channel_id=channel,
+                text=p["text"],
+                mode="shareNow",
+                scheduling_type="automatic",
+            )
+        except buffer_client.BufferError as e:
+            warn(f"dispatch_approved[x_burst/{run_id}]: Buffer failed for post {p['id']}: {e}")
+            signal_store.update_post_status(
+                p["id"],
+                status="failed",
+                error=str(e)[:500],
+                discord_reaction=triggering_emoji,
+                approved=True,
+            )
+            failed += 1
+            continue
+        signal_store.update_post_status(
+            p["id"],
+            status="posted",
+            buffer_post_id=created.id,
+            discord_reaction=triggering_emoji,
+            approved=True,
+            posted=True,
+        )
+        processed += 1
+
+    marker = BOT_PROCESSED_MARKER if failed == 0 else BOT_FAILED_MARKER
+    for ch_id, mid in msg_snapshots:
+        discord_inbox.add_bot_reaction(ch_id, mid, marker)
+    return (processed, failed, 0)
+
+
 # ---------------------------------------------------------------------------
 # Synthesis run handler (synthesis -> Beehiiv draft)
 # ---------------------------------------------------------------------------
@@ -317,6 +397,15 @@ def _parse_message_ids(blob: Any) -> list[str]:
         except ValueError:
             return []
     return []
+
+
+def _parse_message_ref(ref: str) -> tuple[str, str] | None:
+    if ":" not in ref:
+        return None
+    channel_id, message_id = ref.split(":", 1)
+    if not channel_id or not message_id:
+        return None
+    return channel_id, message_id
 
 
 def _derive_title_from_synthesis(post_row: dict[str, Any]) -> str:

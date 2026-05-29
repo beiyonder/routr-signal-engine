@@ -19,6 +19,7 @@ Output sections:
 from __future__ import annotations
 
 import copy
+import inspect
 import io
 import json
 import os
@@ -1442,6 +1443,131 @@ def check_discord_dump_enrichment_fallbacks() -> None:
     check("enrichment health reports fallback rate", fallback_health["fallback_rate"] == 1.0)
 
 
+def check_discord_dump_cli_surface() -> None:
+    section("[15f] Discord dump analyzer CLI and artifacts")
+
+    try:
+        from routr_signal.tasks import discord_dump_analyze
+    except Exception as e:  # noqa: BLE001
+        check("discord dump analyzer task imports", False, str(e))
+        return
+
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        input_dir = root / "input"
+        output_root = root / "out"
+        input_dir.mkdir()
+        (input_dir / "messages.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "m1",
+                        "channel_id": "c1",
+                        "content": "Useful writeup https://example.com/post from founder@example.com",
+                        "timestamp": "2026-05-20T17:10:25+00:00",
+                        "author": {"id": "u1", "username": "builder"},
+                        "embeds": [{"url": "https://youtu.be/abc123", "title": "Demo"}],
+                    },
+                    {"repo_full_name": "owner/project", "html_url": "https://github.com/owner/project"},
+                    {"unknown": "shape"},
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result = discord_dump_analyze.run_analysis(
+            input_path=input_dir,
+            output_root=output_root,
+            run_id="test-run",
+            max_crawl_urls=10,
+            dry_run=True,
+        )
+        run_dir = output_root / "test-run"
+        check("discord dump analyzer returns run directory", result.output_dir == run_dir)
+        expected = {
+            "run_manifest.json",
+            "messages.normalized.jsonl",
+            "leads.normalized.jsonl",
+            "unsupported.records.jsonl",
+            "links.index.jsonl",
+            "crawl_queue.jsonl",
+            "crawl_results.jsonl",
+            "summary.md",
+            "operator_brief.md",
+        }
+        check("discord dump analyzer writes expected artifacts", expected <= {p.name for p in run_dir.iterdir()})
+        normalized_text = (run_dir / "messages.normalized.jsonl").read_text(encoding="utf-8")
+        check("discord dump analyzer artifacts redact email", "founder@example.com" not in normalized_text)
+        manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+        check("discord dump analyzer manifest records counts", manifest["discord_messages"] == 1 and manifest["lead_records"] == 1 and manifest["unsupported_records"] == 1)
+
+    pyproj = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    check("pyproject.toml declares routr-discord-dump-analyze", "routr-discord-dump-analyze" in pyproj)
+
+
+def check_x_burst_discord_approval_surface() -> None:
+    section("[15g] X-burst Discord approval deployment surface")
+
+    from routr_signal.lib import discord_inbox
+    from routr_signal.lib import signal_store
+    from routr_signal.tasks import dispatch_approved, x_burst
+
+    check("discord_inbox exports DM config check", hasattr(discord_inbox, "is_dm_configured"))
+    check("discord_inbox exports channel-aware DM sender", hasattr(discord_inbox, "send_dm_with_channel"))
+    check("x_burst defines auto-dispatch cap", getattr(x_burst, "X_BURST_DISPATCH_CAP", 0) > 0)
+    check("x_burst records short posts as pending for approval", "status=\"pending\"" in inspect.getsource(x_burst.run))
+    check("x_burst records Discord DM refs on run", "record_run_discord_messages" in inspect.getsource(x_burst.run))
+    check("dispatch handles x_burst runs", "kind == \"x_burst\"" in inspect.getsource(dispatch_approved.run))
+    check("dispatch has x_burst handler", hasattr(dispatch_approved, "_handle_x_burst_run"))
+
+    old_pending = signal_store.pending_posts_for_run
+    old_buffer_configured = dispatch_approved.buffer_client.is_configured
+    old_create_post = dispatch_approved.buffer_client.create_post
+    old_get_message = dispatch_approved.discord_inbox.get_message
+    old_add_reaction = dispatch_approved.discord_inbox.add_bot_reaction
+    old_update = signal_store.update_post_status
+    old_env_required = dispatch_approved.env_required
+    calls: dict[str, Any] = {"created": 0, "updated": [], "reacted": []}
+
+    class _Created:
+        id = "buffer-1"
+
+    try:
+        signal_store.pending_posts_for_run = lambda run_id: [  # type: ignore[assignment]
+            {"id": "post-1", "kind": "x_burst", "platform": "x", "text": "ship this", "hook_format": "x_thread"}
+        ]
+        dispatch_approved.buffer_client.is_configured = lambda: True  # type: ignore[assignment]
+
+        def _create_post(**kwargs: Any) -> _Created:
+            calls["created"] += 1
+            return _Created()
+
+        dispatch_approved.buffer_client.create_post = _create_post  # type: ignore[assignment]
+        dispatch_approved.discord_inbox.get_message = lambda channel_id, message_id: {  # type: ignore[assignment]
+            "reactions": [{"me": False, "emoji": {"name": dispatch_approved.HOOK_APPROVAL_EMOJI}}]
+        }
+        dispatch_approved.discord_inbox.add_bot_reaction = lambda channel_id, message_id, emoji: calls["reacted"].append((channel_id, message_id, emoji)) or True  # type: ignore[assignment]
+        signal_store.update_post_status = lambda post_id, **kwargs: calls["updated"].append((post_id, kwargs))  # type: ignore[assignment]
+        dispatch_approved.env_required = lambda key: "buffer-channel"  # type: ignore[assignment]
+
+        processed, failed, skipped = dispatch_approved._handle_x_burst_run(
+            {"id": "run-x"}, ["dm-channel:dm-message"]
+        )
+        check("x_burst dispatch processes approved DM", (processed, failed, skipped) == (1, 0, 0))
+        check("x_burst dispatch creates one Buffer post", calls["created"] == 1)
+        check("x_burst dispatch marks post posted", calls["updated"] and calls["updated"][0][1]["status"] == "posted")
+        check("x_burst dispatch marks Discord message processed", calls["reacted"] == [("dm-channel", "dm-message", dispatch_approved.BOT_PROCESSED_MARKER)])
+    finally:
+        signal_store.pending_posts_for_run = old_pending  # type: ignore[assignment]
+        dispatch_approved.buffer_client.is_configured = old_buffer_configured  # type: ignore[assignment]
+        dispatch_approved.buffer_client.create_post = old_create_post  # type: ignore[assignment]
+        dispatch_approved.discord_inbox.get_message = old_get_message  # type: ignore[assignment]
+        dispatch_approved.discord_inbox.add_bot_reaction = old_add_reaction  # type: ignore[assignment]
+        signal_store.update_post_status = old_update  # type: ignore[assignment]
+        dispatch_approved.env_required = old_env_required  # type: ignore[assignment]
+
+
 def main() -> int:
     print("=== routr-signal-engine validation suite ===\n")
 
@@ -1469,6 +1595,8 @@ def main() -> int:
     check_discord_dump_links()
     check_discord_dump_crawl_queue()
     check_discord_dump_enrichment_fallbacks()
+    check_discord_dump_cli_surface()
+    check_x_burst_discord_approval_surface()
 
     # ----- Live idempotence ------
     try:
