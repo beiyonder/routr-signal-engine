@@ -70,7 +70,7 @@ Each run produces:
   `people`, `signal_people`, and `weekly_people` tables (gitignored locally;
   travels between CI runs via Actions cache).
 - `data/digests/YYYY-MM-DD.md` — human-readable digest snapshot (gitignored;
-  also archived via Actions artifacts, 90-day retention).
+  kept out of public Actions artifacts).
 - Discord post to `$DISCORD_WEBHOOK_URL` (native embed format, NOT `/slack`).
   The webhook is hit with `?wait=true` so we get the message IDs back; those
   IDs live on the `runs.discord_message_ids` column so the dispatch worker
@@ -88,6 +88,17 @@ routr-discord-dump-analyze --input ..\leads_output --output-root data\private\di
 It writes private, gitignored artifacts under `data/private/discord_dump/<run>/`,
 including `messages.csv`, `people.csv`, `links.csv`, `operator_brief.md`, and
 the raw JSONL normalization/enrichment files.
+
+## Security posture
+
+- Runtime data is not committed. `data/raw/`, `data/digests/`, `data/leads/`,
+  `data/seen/`, `data/private/`, and `data/intel.db` are gitignored.
+- Operational signal data is not uploaded as Actions artifacts from this public
+  repository. State needed by scheduled jobs stays in the Actions cache.
+- Secrets stay in GitHub Actions Secrets and local `.env` only. Do not paste real
+  tokens into tracked files or prompt examples.
+- The pre-commit hook blocks credential-shaped staged content and sensitive data
+  paths. Install it after cloning with `tools/install_hooks.ps1`.
 
 ## Daily digest structure
 

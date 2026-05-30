@@ -124,9 +124,9 @@ Each source module:
    the id to the in-memory set.
 
 The SQLite file at `data/intel.db` is gitignored. State travels between CI
-runs via the Actions cache (10 GB, 7-day idle eviction). The `data/digests/`,
-`data/raw/`, `data/leads/` outputs are uploaded as 90-day artifacts so old
-runs are recoverable via `gh run download`.
+runs via the Actions cache (10 GB, 7-day idle eviction). Operational outputs
+such as `data/digests/`, `data/raw/`, and `data/leads/` are deliberately not
+uploaded as Actions artifacts from this public repository.
 
 ## People Model
 
@@ -168,7 +168,7 @@ $env:ROUTR_SIGNAL_PUBLISH="0"; uv run routr-signal
 |---------|----------|-------------------------------------------------------------------------------|
 | 0       | done     | Scaffold, configs, workflow skeleton                                          |
 | 1       | done     | HN + Reddit + GitHub sources, Claude classifier, post drafter, Discord output |
-| 1b      | done     | SQLite persistence + Actions cache state + 90-day artifacts                   |
+| 1b      | done     | SQLite persistence + Actions cache state                                      |
 | 1c      | done     | Cosine prefilter (Gemini embeddings) between keyword and LLM                  |
 | 3a      | done     | Source expansion (12 subreddits, 21 HN queries, X via Playwright cookies)     |
 | 3b      | done     | HF Papers + Newsletters RSS sources                                           |

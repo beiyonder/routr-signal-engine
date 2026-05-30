@@ -652,6 +652,11 @@ def check_distribution_modules() -> None:
         dispatch_approved.BOT_PROCESSED_MARKER == "\U0001F680",
     )
 
+    repo_root = Path(__file__).resolve().parent.parent
+    pipeline_yml = (repo_root / ".github" / "workflows" / "pipeline.yml").read_text(encoding="utf-8")
+    check("pipeline.yml does not upload private runtime artifacts", "actions/upload-artifact" not in pipeline_yml)
+    check("pipeline.yml explicitly keeps outputs off artifacts", "Keep private outputs off Actions artifacts" in pipeline_yml)
+
     # _parse_message_ids handles all input shapes
     parse = dispatch_approved._parse_message_ids
     check("_parse_message_ids handles None", parse(None) == [])

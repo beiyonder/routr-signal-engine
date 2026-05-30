@@ -177,17 +177,10 @@ jobs:
             data/cache/anchors-*.json
           key: ${{ env.PIPELINE_CACHE_KEY }}
 
-      - name: Upload raw data + digest as private artifact (90-day retention)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-output-${{ github.run_id }}
-          path: |
-            data/digests
-            data/raw
-            data/leads
-          retention-days: 90
-          if-no-files-found: ignore
+      - name: Keep private outputs off Actions artifacts
+        run: |
+          echo "data/digests, data/raw, data/leads, and data/intel.db stay in the workflow cache only."
+          echo "Do not upload operational signal data as artifacts from this public repository."
 
   # ---------------------------------------------------------------------------
   # X_BURST: draft standalone X posts from recent signals and DM for review.
