@@ -142,7 +142,7 @@ jobs:
           ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
           ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
           ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
-          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3.1-pro-preview' }}
           ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
@@ -263,7 +263,7 @@ jobs:
           ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
           ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
           ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
-          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3.1-pro-preview' }}
           ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
@@ -336,7 +336,7 @@ jobs:
           ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
           ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
           ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
-          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3.1-pro-preview' }}
           ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
@@ -401,7 +401,7 @@ jobs:
           ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
           ROUTR_SIGNAL_LLM_MODEL:         ${{ vars.ROUTR_SIGNAL_LLM_MODEL }}
           ROUTR_SIGNAL_DRAFTER_PROVIDER:  ${{ vars.ROUTR_SIGNAL_DRAFTER_PROVIDER  || 'gemini' }}
-          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3-pro-preview' }}
+          ROUTR_SIGNAL_DRAFTER_MODEL:     ${{ vars.ROUTR_SIGNAL_DRAFTER_MODEL     || 'gemini-3.1-pro-preview' }}
           ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}

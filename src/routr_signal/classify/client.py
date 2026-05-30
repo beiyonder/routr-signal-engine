@@ -37,7 +37,7 @@ DEFAULT_CLASSIFIER_MODELS: dict[str, str] = {
 # Default model per provider for the DRAFTER tier (flagship, low-volume, prose-heavy).
 DEFAULT_DRAFTER_MODELS: dict[str, str] = {
     "anthropic": "claude-opus-4-7",
-    "gemini": "gemini-3-pro-preview",
+    "gemini": "gemini-3.1-pro-preview",
     "openai": "gpt-5",
 }
 
