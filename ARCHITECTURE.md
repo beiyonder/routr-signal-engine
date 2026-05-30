@@ -55,6 +55,7 @@ Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `
   ├─ persist
   │    output/markdown_digest.py → data/digests/YYYY-MM-DD.md (gitignored)
   │    update `signals` rows: rank_in_run, action_label='queued'
+  │    refresh `people` + `signal_people` aggregates from stored signals
   │    close `runs` row with status, counts, digest_md, hooks_json
   │
   └─ distribute
@@ -89,8 +90,9 @@ dispatch-approved.yml   (every 15 min, on :15/:30/:45)
 weekly-synthesis.yml    (Sundays 14:00 UTC)
   │
   ├─ aggregate last 7 days of signals; pick top 10 by combined_score
+  ├─ snapshot the top weekly people into `weekly_people`
   ├─ classify/synthesize.py → 400-500 word essay via flagship drafter model
-  ├─ post to Discord as a "synthesis draft" message
+  ├─ post to Discord as a "synthesis draft" message with People to watch
   ├─ pre-create a `pending` Beehiiv post
   └─ user reacts 📰 to push the draft to Beehiiv (sends as draft;
      user reviews and clicks Send in Beehiiv UI when ready)
@@ -126,6 +128,21 @@ runs via the Actions cache (10 GB, 7-day idle eviction). The `data/digests/`,
 `data/raw/`, `data/leads/` outputs are uploaded as 90-day artifacts so old
 runs are recoverable via `gh run download`.
 
+## People Model
+
+`people` is a queryable cross-source roster derived from visible authors and
+classifier-proposed lead handles. `signal_people` joins each signal to one or
+more people with role evidence (`author` or `lead`). `weekly_people` stores a
+ranked 7-day snapshot for the weekly synthesis "People to watch" section.
+
+Useful columns:
+
+- `people.id` is `<platform>:<normalized_handle>`.
+- `people.signal_count`, `relevant_signal_count`, score aggregates, and
+  `top_topics_json` are refreshed from `signals` each daily run.
+- `people.action_label` and `action_notes` are preserved for manual triage.
+- `weekly_people.summary` is a compact operator-facing person snapshot.
+
 ## Local development
 
 ```pwsh
@@ -158,7 +175,7 @@ $env:ROUTR_SIGNAL_PUBLISH="0"; uv run routr-signal
 | D1      | done     | Distribution: dispatch-approved cron, Buffer X posting, Discord reaction poll |
 | D2      | done     | Weekly synthesis cron (Sundays) + Beehiiv draft publish                       |
 | D3      | done     | `posts` table for outgoing-post tracking + status lifecycle                   |
-| 2       | future   | `people` + `signal_people` tables + weekly person snapshots                   |
+| 2       | done     | `people` + `signal_people` tables + weekly person snapshots                   |
 | 4-7     | deferred | Cloudflare D1 + Pages dashboard + Access auth (see `40-distribution-stack`)   |
 | 8       | future   | Engagement feedback loop (blocked by X API 402; revisit via Buffer analytics) |
 

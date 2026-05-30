@@ -809,6 +809,66 @@ def check_topic_frequency() -> None:
     conn.commit()
 
 
+def check_people_tables() -> None:
+    """people, signal_people, and weekly_people stay queryable from signals."""
+
+    section("[12b] people aggregation tables")
+
+    import json as _json
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from routr_signal.lib import db as _db
+    from routr_signal.lib import signal_store as _ss
+
+    conn = _db.get_db()
+    people_cols = {row[1] for row in conn.execute("PRAGMA table_info(people)").fetchall()}
+    signal_people_cols = {row[1] for row in conn.execute("PRAGMA table_info(signal_people)").fetchall()}
+    weekly_cols = {row[1] for row in conn.execute("PRAGMA table_info(weekly_people)").fetchall()}
+    check("people table exists with handle and signal counts", {"id", "handle", "signal_count"}.issubset(people_cols))
+    check("signal_people table exists with role evidence", {"signal_id", "person_id", "role"}.issubset(signal_people_cols))
+    check("weekly_people table exists with summary", {"week_start", "person_id", "summary"}.issubset(weekly_cols))
+
+    src = "_validate_people"
+    sid = f"_people-{_uuid.uuid4().hex[:6]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn.execute("DELETE FROM signals WHERE source = ?", (src,))
+    conn.execute("DELETE FROM signal_people WHERE signal_id = ?", (sid,))
+    conn.commit()
+    conn.execute(
+        """
+        INSERT INTO signals (id, source, author_handle, title, body, url, created_at, fetched_at,
+                             raw_extra, llm_relevant, llm_topics, llm_lead_handle,
+                             llm_lead_platform, classified_at, combined_score)
+        VALUES (?, ?, '@Builder', 't', 'b', 'https://x.com/Builder/status/1', ?, ?, '{}',
+                1, ?, '@LeadUser', 'x', ?, 0.77)
+        """,
+        (sid, src, now_iso, now_iso, _json.dumps(["agent_reliability"]), now_iso),
+    )
+    conn.commit()
+
+    count = _ss.rebuild_people_from_signals()
+    check("rebuild_people_from_signals returns aggregate count", count >= 2)
+    author = conn.execute("SELECT * FROM people WHERE id = ?", (f"{src}:builder",)).fetchone()
+    lead = conn.execute("SELECT * FROM people WHERE id = 'x:leaduser'").fetchone()
+    joins = conn.execute("SELECT role FROM signal_people WHERE signal_id = ?", (sid,)).fetchall()
+    check("people table records signal author", author is not None and author["signal_count"] >= 1)
+    check("people table records classifier lead", lead is not None and lead["platform"] == "x")
+    check("signal_people records author and lead roles", {r["role"] for r in joins} >= {"author", "lead"})
+
+    snapshot = _ss.weekly_people_snapshot(window_days=7, limit=10)
+    check("weekly_people_snapshot returns people", any(p["id"] == f"{src}:builder" for p in snapshot))
+    weekly = conn.execute("SELECT * FROM weekly_people WHERE person_id = ?", (f"{src}:builder",)).fetchone()
+    check("weekly_people table stores snapshot summary", weekly is not None and "surfaced" in weekly["summary"])
+
+    # cleanup
+    conn.execute("DELETE FROM signals WHERE source = ?", (src,))
+    conn.execute("DELETE FROM signal_people WHERE signal_id = ?", (sid,))
+    conn.execute("DELETE FROM weekly_people WHERE person_id IN (?, 'x:leaduser')", (f"{src}:builder",))
+    conn.execute("DELETE FROM people WHERE id IN (?, 'x:leaduser')", (f"{src}:builder",))
+    conn.commit()
+
+
 def check_hook_source_link() -> None:
     """The Discord hooks_embed renders a clickable source link when a hook
     anchors to a known signal."""
@@ -1493,12 +1553,21 @@ def check_discord_dump_cli_surface() -> None:
             "links.index.jsonl",
             "crawl_queue.jsonl",
             "crawl_results.jsonl",
+            "messages.csv",
+            "links.csv",
+            "people.csv",
             "summary.md",
             "operator_brief.md",
         }
         check("discord dump analyzer writes expected artifacts", expected <= {p.name for p in run_dir.iterdir()})
         normalized_text = (run_dir / "messages.normalized.jsonl").read_text(encoding="utf-8")
         check("discord dump analyzer artifacts redact email", "founder@example.com" not in normalized_text)
+        people_csv = (run_dir / "people.csv").read_text(encoding="utf-8")
+        links_csv = (run_dir / "links.csv").read_text(encoding="utf-8")
+        brief = (run_dir / "operator_brief.md").read_text(encoding="utf-8")
+        check("discord dump analyzer writes people CSV", "builder" in people_csv and "message_count" in people_csv)
+        check("discord dump analyzer writes links CSV", "https://example.com/post" in links_csv and "crawl_status" in links_csv)
+        check("operator brief points to spreadsheet files", "people.csv" in brief and "messages.csv" in brief and "links.csv" in brief)
         manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
         check("discord dump analyzer manifest records counts", manifest["discord_messages"] == 1 and manifest["lead_records"] == 1 and manifest["unsupported_records"] == 1)
 
@@ -1587,6 +1656,7 @@ def main() -> int:
     check_posts_table()
     check_new_sources_register()
     check_topic_frequency()
+    check_people_tables()
     check_hook_source_link()
     check_x_burst_surface()
     check_x_watch_surface()

@@ -15,7 +15,9 @@ Tables:
                synthesis -> Beehiiv newsletter draft, etc). Pre-created as
                'pending' at publish time; promoted to 'posted'/'failed' by
                the dispatch worker after the user reacts in Discord.
-    people  -- (Phase 2) authors aggregated across signals. Not yet built.
+    people  -- authors/leads aggregated across signals.
+    signal_people -- join table from signals to people with role evidence.
+    weekly_people -- weekly snapshots for person-of-interest review.
     drafts  -- (Phase 2) every drafted post hook. Not yet built.
 
 Connection management:
@@ -123,6 +125,67 @@ CREATE INDEX IF NOT EXISTS idx_posts_signal   ON posts(signal_id);
 CREATE INDEX IF NOT EXISTS idx_posts_run      ON posts(run_id);
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 CREATE INDEX IF NOT EXISTS idx_posts_created  ON posts(created_at);
+
+CREATE TABLE IF NOT EXISTS people (
+    id                      TEXT PRIMARY KEY,         -- platform:normalized_handle
+    platform                TEXT NOT NULL,
+    handle                  TEXT NOT NULL,
+    display_name            TEXT,
+    profile_url             TEXT,
+    first_seen_at           TEXT NOT NULL,
+    last_seen_at            TEXT NOT NULL,
+    signal_count            INTEGER NOT NULL DEFAULT 0,
+    relevant_signal_count   INTEGER NOT NULL DEFAULT 0,
+    avg_combined_score      REAL,
+    max_combined_score      REAL,
+    last_signal_id          TEXT,
+    top_topics_json         TEXT NOT NULL DEFAULT '[]',
+    action_label            TEXT NOT NULL DEFAULT 'monitor',
+    action_notes            TEXT,
+    metadata                TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_people_platform ON people(platform);
+CREATE INDEX IF NOT EXISTS idx_people_handle ON people(handle);
+CREATE INDEX IF NOT EXISTS idx_people_last_seen ON people(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_people_signal_count ON people(signal_count);
+
+CREATE TABLE IF NOT EXISTS signal_people (
+    signal_id       TEXT NOT NULL,
+    person_id       TEXT NOT NULL,
+    role            TEXT NOT NULL,                 -- author | lead
+    platform        TEXT NOT NULL,
+    handle          TEXT NOT NULL,
+    evidence_json   TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (signal_id, person_id, role),
+    FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE,
+    FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_people_person ON signal_people(person_id);
+CREATE INDEX IF NOT EXISTS idx_signal_people_signal ON signal_people(signal_id);
+CREATE INDEX IF NOT EXISTS idx_signal_people_role ON signal_people(role);
+
+CREATE TABLE IF NOT EXISTS weekly_people (
+    week_start              TEXT NOT NULL,
+    person_id               TEXT NOT NULL,
+    platform                TEXT NOT NULL,
+    handle                  TEXT NOT NULL,
+    signal_count            INTEGER NOT NULL,
+    relevant_signal_count   INTEGER NOT NULL,
+    avg_combined_score      REAL,
+    max_combined_score      REAL,
+    top_topics_json         TEXT NOT NULL DEFAULT '[]',
+    top_signal_id           TEXT,
+    summary                 TEXT NOT NULL DEFAULT '',
+    created_at              TEXT NOT NULL,
+    PRIMARY KEY (week_start, person_id),
+    FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_people_week ON weekly_people(week_start);
+CREATE INDEX IF NOT EXISTS idx_weekly_people_rank ON weekly_people(week_start, relevant_signal_count, signal_count);
 """
 
 

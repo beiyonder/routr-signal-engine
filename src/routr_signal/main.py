@@ -163,6 +163,12 @@ def run() -> int:
     for rank, c in enumerate(digest.pain_signals, start=1):
         signal_store.update_rank(c.raw.id, rank=rank, run_id=run_id)
 
+    # 3aa. Refresh person aggregates after classification/ranking so the
+    # people tables are queryable even before the future dashboard exists.
+    people_count = signal_store.rebuild_people_from_signals()
+    if people_count:
+        info(f"people: refreshed {people_count} aggregate row(s)")
+
     # 3b. Compute weekly topic frequency. The drafter uses it to avoid
     #     re-covering already-saturated angles; the digest footer surfaces
     #     it so the operator can see the topic distribution at a glance.

@@ -17,8 +17,10 @@ millions of rows.
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import get_db
@@ -376,6 +378,277 @@ def topic_frequency(window_days: int = 7) -> dict[str, int]:
 
     # Return as a plain dict ordered by frequency desc, top 20.
     return dict(counter.most_common(20))
+
+
+# ---------------------------------------------------------------------------
+# People aggregation
+# ---------------------------------------------------------------------------
+
+
+def rebuild_people_from_signals() -> int:
+    """Rebuild people and signal_people from the current signals table.
+
+    People are derived from visible authors and classifier-proposed lead handles.
+    Existing people.action_label/action_notes are preserved by upsert so manual
+    triage can survive aggregate refreshes.
+    """
+
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT id, source, author_handle, url, created_at, fetched_at,
+               llm_relevant, llm_lead_handle, llm_lead_platform,
+               llm_topics, combined_score, raw_extra
+          FROM signals
+         WHERE COALESCE(author_handle, '') != ''
+            OR COALESCE(llm_lead_handle, '') != ''
+        """
+    ).fetchall()
+
+    conn.execute("DELETE FROM signal_people")
+    aggregates: dict[str, dict[str, Any]] = {}
+    now = _utcnow_iso()
+
+    for row in rows:
+        links = _people_for_signal(dict(row))
+        for link in links:
+            person_id = link["person_id"]
+            agg = aggregates.setdefault(
+                person_id,
+                {
+                    "id": person_id,
+                    "platform": link["platform"],
+                    "handle": link["handle"],
+                    "display_name": link["display_name"],
+                    "profile_url": link["profile_url"],
+                    "first_seen_at": row["created_at"] or row["fetched_at"],
+                    "last_seen_at": row["created_at"] or row["fetched_at"],
+                    "signal_ids": set(),
+                    "relevant_signal_ids": set(),
+                    "scores": [],
+                    "last_signal_id": row["id"],
+                    "topics": Counter(),
+                },
+            )
+            seen_at = row["created_at"] or row["fetched_at"]
+            if seen_at:
+                agg["first_seen_at"] = min(agg["first_seen_at"], seen_at)
+                agg["last_seen_at"] = max(agg["last_seen_at"], seen_at)
+                if seen_at >= agg["last_seen_at"]:
+                    agg["last_signal_id"] = row["id"]
+            agg["display_name"] = agg["display_name"] or link["display_name"]
+            agg["profile_url"] = agg["profile_url"] or link["profile_url"]
+            agg["signal_ids"].add(row["id"])
+            if int(row["llm_relevant"] or 0) == 1:
+                agg["relevant_signal_ids"].add(row["id"])
+            score = row["combined_score"]
+            if score is not None:
+                agg["scores"].append(float(score))
+            agg["topics"].update(_topics_from_json(row["llm_topics"]))
+
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO people (
+                    id, platform, handle, display_name, profile_url,
+                    first_seen_at, last_seen_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    person_id,
+                    link["platform"],
+                    link["handle"],
+                    link["display_name"],
+                    link["profile_url"],
+                    row["created_at"] or row["fetched_at"] or now,
+                    row["created_at"] or row["fetched_at"] or now,
+                    json.dumps({"created_from": "signal_people_rebuild"}, ensure_ascii=False),
+                ),
+            )
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO signal_people (
+                    signal_id, person_id, role, platform, handle, evidence_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    person_id,
+                    link["role"],
+                    link["platform"],
+                    link["handle"],
+                    json.dumps(link["evidence"], ensure_ascii=False),
+                    now,
+                ),
+            )
+
+    for agg in aggregates.values():
+        scores = agg["scores"]
+        avg_score = round(sum(scores) / len(scores), 4) if scores else None
+        max_score = round(max(scores), 4) if scores else None
+        top_topics = [topic for topic, _ in agg["topics"].most_common(10)]
+        conn.execute(
+            """
+            INSERT INTO people (
+                id, platform, handle, display_name, profile_url, first_seen_at, last_seen_at,
+                signal_count, relevant_signal_count, avg_combined_score, max_combined_score,
+                last_signal_id, top_topics_json, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                platform = excluded.platform,
+                handle = excluded.handle,
+                display_name = COALESCE(excluded.display_name, people.display_name),
+                profile_url = COALESCE(excluded.profile_url, people.profile_url),
+                first_seen_at = MIN(people.first_seen_at, excluded.first_seen_at),
+                last_seen_at = excluded.last_seen_at,
+                signal_count = excluded.signal_count,
+                relevant_signal_count = excluded.relevant_signal_count,
+                avg_combined_score = excluded.avg_combined_score,
+                max_combined_score = excluded.max_combined_score,
+                last_signal_id = excluded.last_signal_id,
+                top_topics_json = excluded.top_topics_json,
+                metadata = excluded.metadata
+            """,
+            (
+                agg["id"],
+                agg["platform"],
+                agg["handle"],
+                agg["display_name"],
+                agg["profile_url"],
+                agg["first_seen_at"],
+                agg["last_seen_at"],
+                len(agg["signal_ids"]),
+                len(agg["relevant_signal_ids"]),
+                avg_score,
+                max_score,
+                agg["last_signal_id"],
+                json.dumps(top_topics, ensure_ascii=False),
+                json.dumps({"refreshed_at": now}, ensure_ascii=False),
+            ),
+        )
+    conn.commit()
+    return len(aggregates)
+
+
+def weekly_people_snapshot(*, window_days: int = 7, limit: int = 10) -> list[dict[str, Any]]:
+    """Persist and return a ranked weekly person snapshot."""
+
+    conn = get_db()
+    rebuild_people_from_signals()
+    today = datetime.now(timezone.utc).date()
+    week_start_date = today - timedelta(days=today.weekday())
+    week_start = week_start_date.isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT id, platform, handle, display_name, signal_count, relevant_signal_count,
+               avg_combined_score, max_combined_score, last_signal_id, top_topics_json
+          FROM people
+         WHERE last_seen_at >= ?
+         ORDER BY relevant_signal_count DESC, signal_count DESC, max_combined_score DESC NULLS LAST
+         LIMIT ?
+        """,
+        (cutoff, limit),
+    ).fetchall()
+    now = _utcnow_iso()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        topics = _topics_from_json(row["top_topics_json"])
+        name = row["display_name"] or row["handle"]
+        topic_text = ", ".join(topics[:3]) if topics else "mixed topics"
+        summary = (
+            f"{name} surfaced {row['signal_count']} signal(s), "
+            f"{row['relevant_signal_count']} classified relevant; topics: {topic_text}."
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO weekly_people (
+                week_start, person_id, platform, handle, signal_count, relevant_signal_count,
+                avg_combined_score, max_combined_score, top_topics_json, top_signal_id,
+                summary, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                week_start,
+                row["id"],
+                row["platform"],
+                row["handle"],
+                row["signal_count"],
+                row["relevant_signal_count"],
+                row["avg_combined_score"],
+                row["max_combined_score"],
+                row["top_topics_json"],
+                row["last_signal_id"],
+                summary,
+                now,
+            ),
+        )
+        out.append({**dict(row), "week_start": week_start, "summary": summary})
+    conn.commit()
+    return out
+
+
+def _people_for_signal(row: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    author = _normalize_handle(row.get("author_handle"))
+    if author:
+        platform = str(row.get("source") or "other")
+        out.append(_person_link(platform, author, role="author", row=row))
+    lead = _normalize_handle(row.get("llm_lead_handle"))
+    if lead:
+        platform = str(row.get("llm_lead_platform") or row.get("source") or "other")
+        out.append(_person_link(platform, lead, role="lead", row=row))
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in out:
+        deduped[(item["person_id"], item["role"], item["handle"])] = item
+    return list(deduped.values())
+
+
+def _person_link(platform: str, handle: str, *, role: str, row: dict[str, Any]) -> dict[str, Any]:
+    person_id = f"{platform}:{handle.lower()}"
+    return {
+        "person_id": person_id,
+        "platform": platform,
+        "handle": handle,
+        "display_name": handle,
+        "profile_url": _profile_url(platform, handle),
+        "role": role,
+        "evidence": {"signal_id": row.get("id"), "source_url": row.get("url")},
+    }
+
+
+def _normalize_handle(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.lstrip("@")
+    text = re.sub(r"\s+", "", text)
+    return text[:160] if text else None
+
+
+def _profile_url(platform: str, handle: str) -> str | None:
+    clean = handle.lstrip("@")
+    if platform == "x":
+        return f"https://x.com/{clean}"
+    if platform == "github":
+        return f"https://github.com/{clean}"
+    if platform == "reddit":
+        return f"https://www.reddit.com/user/{clean}"
+    return None
+
+
+def _topics_from_json(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(t) for t in parsed if isinstance(t, str) and t]
 
 
 # ---------------------------------------------------------------------------

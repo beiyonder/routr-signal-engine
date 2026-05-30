@@ -66,8 +66,9 @@ The system prompts emit strict JSON, so switching providers should not require p
 
 Each run produces:
 
-- `data/intel.db` — SQLite with the canonical `signals`, `runs`, `posts` tables
-  (gitignored locally; travels between CI runs via Actions cache).
+- `data/intel.db` — SQLite with the canonical `signals`, `runs`, `posts`,
+  `people`, `signal_people`, and `weekly_people` tables (gitignored locally;
+  travels between CI runs via Actions cache).
 - `data/digests/YYYY-MM-DD.md` — human-readable digest snapshot (gitignored;
   also archived via Actions artifacts, 90-day retention).
 - Discord post to `$DISCORD_WEBHOOK_URL` (native embed format, NOT `/slack`).
@@ -77,6 +78,16 @@ Each run produces:
 - One `posts` row per auto-dispatchable hook (today: `x_thread`), `status='pending'`.
 - Optional: Slack post to `$SLACK_WEBHOOK_URL` and email to `$EMAIL_TO` (off by
   default in CI).
+
+Private Discord dump analysis is separate from the daily source ingestion:
+
+```pwsh
+routr-discord-dump-analyze --input ..\leads_output --output-root data\private\discord_dump
+```
+
+It writes private, gitignored artifacts under `data/private/discord_dump/<run>/`,
+including `messages.csv`, `people.csv`, `links.csv`, `operator_brief.md`, and
+the raw JSONL normalization/enrichment files.
 
 ## Daily digest structure
 

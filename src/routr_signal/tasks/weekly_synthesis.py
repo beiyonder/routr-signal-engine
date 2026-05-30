@@ -57,8 +57,10 @@ def run() -> int:
     run_id = f"synthesis-{result.period.replace('..', '_to_')}-{uuid.uuid4().hex[:6]}"
     signal_store.open_run(run_id, kind="synthesis")
 
+    weekly_people = signal_store.weekly_people_snapshot(window_days=7, limit=5)
+
     # Post to Discord (2 messages: draft + metadata).
-    msg_ids = _post_synthesis(result)
+    msg_ids = _post_synthesis(result, weekly_people=weekly_people)
     if not msg_ids:
         warn("weekly_synthesis: no Discord messages posted; closing run as failed")
         signal_store.close_run(
@@ -103,6 +105,7 @@ def run() -> int:
         notes=[
             f"weekly synthesis for {result.period}",
             f"dominant theme: {result.dominant_theme}",
+            f"weekly people snapshot: {len(weekly_people)} person(s)",
             SYNTHESIS_APPROVAL_DESCRIPTION,
         ],
         digest_md=_render_synthesis_md(result),
@@ -144,7 +147,11 @@ def _render_synthesis_md(result: synthesize_mod.SynthesisResult) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _post_synthesis(result: synthesize_mod.SynthesisResult) -> list[str]:
+def _post_synthesis(
+    result: synthesize_mod.SynthesisResult,
+    *,
+    weekly_people: list[dict[str, Any]] | None = None,
+) -> list[str]:
     """Post the synthesis to Discord. Returns the list of message IDs that landed."""
 
     raw_url = env("DISCORD_WEBHOOK_URL")
@@ -192,6 +199,12 @@ def _post_synthesis(result: synthesize_mod.SynthesisResult) -> list[str]:
     if result.topic_distribution:
         topic_lines = [f"`{k}`: {v}" for k, v in list(result.topic_distribution.items())[:10]]
         fields.append({"name": "Topic distribution", "value": " · ".join(topic_lines)[:1000], "inline": False})
+    if weekly_people:
+        person_lines = []
+        for p in weekly_people[:5]:
+            label = p.get("display_name") or p.get("handle") or p.get("id")
+            person_lines.append(f"• `{label}` — {p.get('summary', '')}")
+        fields.append({"name": "People to watch", "value": "\n".join(person_lines)[:1000], "inline": False})
 
     msg2 = {
         "username": "Routr Synthesis",
