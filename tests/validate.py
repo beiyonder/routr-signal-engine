@@ -814,6 +814,35 @@ def check_topic_frequency() -> None:
     conn.commit()
 
 
+def check_post_drafter_memory() -> None:
+    section("[12a] post drafter memory")
+
+    from routr_signal.lib.config import prompt as _prompt
+
+    post_prompt = _prompt("post_drafter")
+    check(
+        "post_drafter prompt forbids invented evidence",
+        "Never invent measurements" in post_prompt and "No invented evidence" in post_prompt,
+    )
+    check(
+        "post_drafter prompt applies simple conversational style",
+        "ordinary words" in post_prompt and "sharp engineer" in post_prompt,
+    )
+
+    payload = post_drafter._render_payload(
+        [],
+        topic_frequency={"mcp": 6},
+        recent_posts=[{"signal_id": "s1", "status": "posted", "text": "old state drift frame"}],
+    )
+    check(
+        "post_drafter payload includes recent X post memory",
+        "recent_x_posts_last_14_days" in payload and "old state drift frame" in payload,
+    )
+    check(
+        "post_drafter payload keeps topic frequency memory",
+        '"mcp": 6' in payload,
+    )
+
 def check_people_tables() -> None:
     """people, signal_people, and weekly_people stay queryable from signals."""
 
@@ -973,6 +1002,14 @@ def check_x_burst_surface() -> None:
     check(
         "x_burst prompt includes recent post novelty memory",
         "recent_x_posts_last_14_days" in burst_prompt and "same post with nouns swapped" in burst_prompt,
+    )
+    check(
+        "x_burst prompt forbids invented evidence",
+        "Never invent measurements" in burst_prompt and "No invented evidence" in burst_prompt,
+    )
+    check(
+        "x_burst prompt applies simple conversational style",
+        "ordinary words" in burst_prompt and "sharp engineer" in burst_prompt,
     )
 
     # Drafter module
@@ -1680,6 +1717,7 @@ def main() -> int:
     check_posts_table()
     check_new_sources_register()
     check_topic_frequency()
+    check_post_drafter_memory()
     check_people_tables()
     check_hook_source_link()
     check_x_burst_surface()

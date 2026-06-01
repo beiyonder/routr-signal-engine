@@ -21,6 +21,7 @@ def draft(
     top_signals: list[ClassifiedItem],
     *,
     topic_frequency: dict[str, int] | None = None,
+    recent_posts: list[dict[str, Any]] | None = None,
 ) -> tuple[list[PostHook], bool]:
     """Return (hooks, low_signal_day).
 
@@ -31,9 +32,16 @@ def draft(
     it through to the drafter so it can avoid re-covering angles that have
     already saturated the week's conversation. See the system prompt for the
     rule the model applies to it.
+
+    `recent_posts` gives the drafter a small memory of recent outgoing X hooks
+    so the daily hook does not repeat the same claim/rhythm as prior days.
     """
 
-    payload = _render_payload(top_signals[:TOP_N_SIGNALS], topic_frequency=topic_frequency)
+    payload = _render_payload(
+        top_signals[:TOP_N_SIGNALS],
+        topic_frequency=topic_frequency,
+        recent_posts=recent_posts,
+    )
     system = prompt(SYSTEM_PROMPT_NAME)
 
     from .client import call_json
@@ -55,6 +63,7 @@ def _render_payload(
     signals: list[ClassifiedItem],
     *,
     topic_frequency: dict[str, int] | None = None,
+    recent_posts: list[dict[str, Any]] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "todays_top_signals": [
@@ -72,6 +81,14 @@ def _render_payload(
             for c in signals
         ],
         "topic_frequency_last_7_days": topic_frequency or {},
+        "recent_x_posts_last_14_days": [
+            {
+                "signal_id": p.get("signal_id"),
+                "status": p.get("status"),
+                "text_excerpt": (p.get("text") or "")[:500],
+            }
+            for p in (recent_posts or [])[:20]
+        ],
     }
     return (
         "Generate exactly five post hooks (x_thread, linkedin, reddit, hn_comment, devto_title) "
@@ -80,7 +97,8 @@ def _render_payload(
         "anchor_signal_id with the matching id; if none fit, leave anchor_signal_id null and "
         "set low_signal_day true.\n\n"
         "Use topic_frequency_last_7_days to avoid re-covering already-saturated angles unless "
-        "you have a new data point or contrarian read.\n\n"
+        "you have a new data point or contrarian read. Study recent_x_posts_last_14_days "
+        "and do not repeat their claims, metaphors, failure modes, rhythm, or framing.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
 

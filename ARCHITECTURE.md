@@ -5,7 +5,7 @@
 
 ## Goal
 
-Every morning at **07:00 UTC** a GitHub Actions workflow:
+Every morning at **02:30 UTC** the shared GitHub Actions `pipeline.yml` workflow:
 
 1. Pulls fresh items from a handful of high-signal sources.
 2. Sends candidate items to a small classifier LLM for relevance scoring + lead extraction.
@@ -34,7 +34,7 @@ Competitor repos initially monitored: `BerriAI/litellm`, `Portkey-AI/gateway`, `
 ## Daily flow
 
 ```
-07:00 UTC  daily-signals.yml
+02:30 UTC  pipeline.yml / daily job
   │
   ├─ fetch (sequential, ~90s)
   │    sources/hn.py, reddit.py, github_issues.py, twitter.py,
@@ -73,7 +73,7 @@ out-of-band publishing without any new infrastructure:
 ```
 [user reacts ✅ on a digest message]
 
-dispatch-approved.yml   (every 15 min, on :15/:30/:45)
+pipeline.yml / dispatch job   (every 15 min, on :15/:30/:45)
   │
   ├─ poll Discord REST API for reactions on recent runs' message IDs
   │    lib/discord_inbox.py — bot token, no gateway connection
@@ -87,7 +87,7 @@ dispatch-approved.yml   (every 15 min, on :15/:30/:45)
 ```
 
 ```
-weekly-synthesis.yml    (Sundays 14:00 UTC)
+pipeline.yml / synthesis job    (Sundays 14:00 UTC)
   │
   ├─ aggregate last 7 days of signals; pick top 10 by combined_score
   ├─ snapshot the top weekly people into `weekly_people`
@@ -183,6 +183,6 @@ $env:ROUTR_SIGNAL_PUBLISH="0"; uv run routr-signal
 
 | Console script      | Trigger                            | What                                            |
 |---------------------|------------------------------------|-------------------------------------------------|
-| `routr-signal`      | `daily-signals.yml` (07:00 UTC)    | Daily fetch → classify → publish to Discord     |
-| `routr-synthesize`  | `weekly-synthesis.yml` (Sun 14:00) | Aggregate week → draft essay → post to Discord  |
-| `routr-dispatch`    | `dispatch-approved.yml` (every 15) | Poll reactions → post via Buffer / Beehiiv      |
+| `routr-signal`      | `pipeline.yml` daily job (02:30 UTC)      | Daily fetch → classify → publish to Discord     |
+| `routr-synthesize`  | `pipeline.yml` synthesis job (Sun 14:00)  | Aggregate week → draft essay → post to Discord  |
+| `routr-dispatch`    | `pipeline.yml` dispatch job (every 15)    | Poll reactions → post via Buffer / Beehiiv      |

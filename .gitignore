@@ -69,6 +69,7 @@ _handoff/
 conversation/
 PLAN_v2.md
 prompt.md
+SCALE_UP_ROADMAP.md
 scratch/
 
 # Serena MCP project state (memories, project config, language-server cache).

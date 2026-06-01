@@ -180,7 +180,12 @@ def run() -> int:
         digest.notes.append(f"7d topic frequency (top 6): {freq_line}")
 
     # 4. Generate post hooks (passing topic_frequency for repetition-avoidance)
-    hooks, low_signal = post_drafter.draft(digest.pain_signals, topic_frequency=topic_freq)
+    recent_x_posts = signal_store.recent_post_texts(kind="hook", platform="x", days=14, limit=20)
+    hooks, low_signal = post_drafter.draft(
+        digest.pain_signals,
+        topic_frequency=topic_freq,
+        recent_posts=recent_x_posts,
+    )
     if low_signal:
         digest.notes.append("low_signal_day: drafter fell back to long-running wedges")
     digest.hooks = hooks

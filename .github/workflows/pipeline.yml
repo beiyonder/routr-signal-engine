@@ -123,15 +123,16 @@ jobs:
       - name: Resolve runtime flags
         id: flags
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_SOURCES: ${{ inputs.sources }}
         run: |
-          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_DRY_RUN}" = "true" ]; then
             echo "publish=0" >> $GITHUB_OUTPUT
           else
             echo "publish=1" >> $GITHUB_OUTPUT
           fi
-          if [ -n "${INPUT_SOURCES}" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_SOURCES}" ]; then
             echo "sources=${INPUT_SOURCES}" >> $GITHUB_OUTPUT
           else
             echo "sources=hn,reddit,github_issues,twitter,discord_paste,hf_papers,newsletters" >> $GITHUB_OUTPUT
@@ -237,15 +238,16 @@ jobs:
       - name: Resolve burst flags
         id: burst_flags
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_COUNT:   ${{ inputs.burst_count }}
         run: |
-          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_DRY_RUN}" = "true" ]; then
             echo "dry_run=1" >> $GITHUB_OUTPUT
           else
             echo "dry_run=0" >> $GITHUB_OUTPUT
           fi
-          if [ -n "${INPUT_COUNT}" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_COUNT}" ]; then
             echo "count=${INPUT_COUNT}" >> $GITHUB_OUTPUT
           else
             echo "count=2" >> $GITHUB_OUTPUT
@@ -389,6 +391,26 @@ jobs:
           restore-keys: |
             pipeline-state-
 
+      - name: Resolve x_watch flags
+        id: x_watch_flags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_WINDOW_MINUTES: ${{ inputs.x_watch_window_minutes }}
+          INPUT_MIN_AGE_MINUTES: ${{ inputs.x_watch_min_age_minutes }}
+          INPUT_MIN_SCORE: ${{ inputs.x_watch_min_score }}
+          INPUT_MAX_ALERTS: ${{ inputs.x_watch_max_alerts }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_DRY_RUN}" = "true" ]; then
+            echo "dry_run=1" >> $GITHUB_OUTPUT
+          else
+            echo "dry_run=0" >> $GITHUB_OUTPUT
+          fi
+          echo "window_minutes=${INPUT_WINDOW_MINUTES:-60}" >> $GITHUB_OUTPUT
+          echo "min_age_minutes=${INPUT_MIN_AGE_MINUTES:-10}" >> $GITHUB_OUTPUT
+          echo "min_score=${INPUT_MIN_SCORE:-0.72}" >> $GITHUB_OUTPUT
+          echo "max_alerts=${INPUT_MAX_ALERTS:-3}" >> $GITHUB_OUTPUT
+
       - name: Run fast X watch
         env:
           ROUTR_SIGNAL_LLM_PROVIDER:      ${{ vars.ROUTR_SIGNAL_LLM_PROVIDER      || 'anthropic' }}
@@ -403,11 +425,11 @@ jobs:
           DISCORD_CHANNEL_ID:     ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_USER_DM_ID:     ${{ secrets.DISCORD_USER_DM_ID }}
           ROUTR_SIGNAL_TWITTER_DELAY_S: ${{ vars.ROUTR_X_WATCH_DELAY_S || '10' }}
-          ROUTR_X_WATCH_DRY_RUN:  ${{ inputs.dry_run }}
-          ROUTR_X_WATCH_FRESH_WINDOW_MINUTES: ${{ inputs.x_watch_window_minutes }}
-          ROUTR_X_WATCH_MIN_AGE_MINUTES: ${{ inputs.x_watch_min_age_minutes }}
-          ROUTR_X_WATCH_MIN_SCORE: ${{ inputs.x_watch_min_score }}
-          ROUTR_X_WATCH_MAX_ALERTS: ${{ inputs.x_watch_max_alerts }}
+          ROUTR_X_WATCH_DRY_RUN:  ${{ steps.x_watch_flags.outputs.dry_run }}
+          ROUTR_X_WATCH_FRESH_WINDOW_MINUTES: ${{ steps.x_watch_flags.outputs.window_minutes }}
+          ROUTR_X_WATCH_MIN_AGE_MINUTES: ${{ steps.x_watch_flags.outputs.min_age_minutes }}
+          ROUTR_X_WATCH_MIN_SCORE: ${{ steps.x_watch_flags.outputs.min_score }}
+          ROUTR_X_WATCH_MAX_ALERTS: ${{ steps.x_watch_flags.outputs.max_alerts }}
         run: routr-x-watch
 
       - name: Save pipeline state

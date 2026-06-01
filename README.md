@@ -178,16 +178,19 @@ calls (1,000 req/hr/repo vs 60 unauthenticated).
 
 ## Triggering the workflows
 
-Three workflows run on different schedules:
+One shared `pipeline.yml` workflow runs multiple jobs on different schedules so
+they can share the same Actions cache namespace:
 
-| Workflow                  | Schedule (UTC)                         | Console script      | What                                                   |
-|---------------------------|----------------------------------------|---------------------|--------------------------------------------------------|
-| `daily-signals.yml`       | 07:00 daily                            | `routr-signal`      | Fetch → classify → publish to Discord                  |
-| `weekly-synthesis.yml`    | Sun 14:00                              | `routr-synthesize`  | 7-day aggregate → essay draft → post to Discord        |
-| `dispatch-approved.yml`   | every 15 min on :15/:30/:45            | `routr-dispatch`    | Poll Discord reactions → post via Buffer / Beehiiv     |
+| Job in `pipeline.yml` | Schedule (UTC)                         | Console script      | What                                                   |
+|-----------------------|----------------------------------------|---------------------|--------------------------------------------------------|
+| `daily`               | 02:30 daily                            | `routr-signal`      | Fetch → classify → publish to Discord                  |
+| `x_burst`             | 02:30 and 07:00 daily                  | `routr-burst`       | Draft standalone X posts → Discord DM review           |
+| `synthesis`           | Sun 14:00                              | `routr-synthesize`  | 7-day aggregate → essay draft → post to Discord        |
+| `x_watch`             | every 15 min on :05/:20/:35/:50        | `routr-x-watch`     | Find fast X reply opportunities → Discord DM           |
+| `dispatch`            | every 15 min on :15/:30/:45            | `routr-dispatch`    | Poll Discord reactions → post via Buffer / Beehiiv     |
 
-Each accepts `workflow_dispatch` for manual runs. `daily-signals.yml` also
-takes `dry_run` (skip publish) and `sources` (subset override) inputs.
+Each job can be run manually via `workflow_dispatch` by choosing `task`. Cron
+runs are live by default; manual runs can set `dry_run` for supported tasks.
 
 ## Distribution flow (cross-channel publishing)
 
