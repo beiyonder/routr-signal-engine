@@ -1576,8 +1576,27 @@ def check_discord_dump_cli_surface() -> None:
         manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
         check("discord dump analyzer manifest records counts", manifest["discord_messages"] == 1 and manifest["lead_records"] == 1 and manifest["unsupported_records"] == 1)
 
+        fetched: list[str] = []
+
+        def fake_fetcher(url: str) -> tuple[str, str, bool]:
+            fetched.append(url)
+            return "text/html", "<html><title>Live</title><body>Fetched body</body></html>", False
+
+        live_result = discord_dump_analyze.run_analysis(
+            input_path=input_dir,
+            output_root=output_root,
+            run_id="test-live-run",
+            max_crawl_urls=10,
+            dry_run=False,
+            fetcher=fake_fetcher,
+        )
+        live_results = (live_result.output_dir / "crawl_results.jsonl").read_text(encoding="utf-8")
+        check("discord dump analyzer live mode uses injected fetcher", fetched == ["https://example.com/post"])
+        check("discord dump analyzer live mode writes fetched results", "\"status\": \"fetched\"" in live_results and "Fetched body" in live_results)
+
     pyproj = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
     check("pyproject.toml declares routr-discord-dump-analyze", "routr-discord-dump-analyze" in pyproj)
+    check("discord dump analyzer exposes --live flag", "--live" in inspect.getsource(discord_dump_analyze.cli))
 
 
 def check_x_burst_discord_approval_surface() -> None:

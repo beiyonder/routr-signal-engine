@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..discord_dump.crawl_queue import CrawlLimits, build_crawl_queue
-from ..discord_dump.enrich import enrich_dry_run, summarize_enrichment_health
+from ..discord_dump.enrich import Fetcher, enrich_dry_run, enrich_live, summarize_enrichment_health
 from ..discord_dump.links import extract_links_from_message
 from ..discord_dump.loader import load_json_records
 from ..discord_dump.types import NormalizedLeadRecord, NormalizedMessage, UnsupportedRecord
@@ -34,6 +34,7 @@ def run_analysis(
     run_id: str | None = None,
     max_crawl_urls: int = 1000,
     dry_run: bool = True,
+    fetcher: Fetcher | None = None,
 ) -> DiscordDumpRunResult:
     run = run_id or f"local-{uuid.uuid4().hex[:8]}"
     output_dir = output_root / run
@@ -63,7 +64,7 @@ def run_analysis(
         class_caps={"x": 500, "youtube": 200, "github": 25, "arxiv": 25, "huggingface": 25},
     )
     queue = build_crawl_queue(links, limits=limits)
-    crawl_results = enrich_dry_run(queue) if dry_run else enrich_dry_run(queue)
+    crawl_results = enrich_dry_run(queue) if dry_run else enrich_live(queue, fetcher=fetcher or _fetch_url)
     health = summarize_enrichment_health(crawl_results)
 
     manifest: dict[str, Any] = {
@@ -104,6 +105,20 @@ def run_analysis(
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _fetch_url(url: str) -> tuple[str, str, bool]:
+    from ..lib import http
+
+    resp = http.get(
+        url,
+        headers={"User-Agent": "routr-signal-discord-dump/0.1"},
+        timeout=20.0,
+        max_retries=1,
+    )
+    text = resp.text
+    limit = 1_000_000
+    return resp.headers.get("content-type", "text/plain"), text[:limit], len(text) > limit
 
 
 def _write_jsonl(path: Path, rows: list[Any]) -> None:
@@ -340,7 +355,8 @@ def cli() -> None:
     parser.add_argument("--output-root", default="data/private/discord_dump")
     parser.add_argument("--run-id")
     parser.add_argument("--max-crawl-urls", type=int, default=1000)
-    parser.add_argument("--dry-run", action="store_true", default=True)
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
+    parser.add_argument("--live", dest="dry_run", action="store_false")
     args = parser.parse_args()
     try:
         result = run_analysis(
