@@ -29,8 +29,8 @@ WEDGE_LABELS: dict[str, str] = {
 }
 
 FORMAT_HEADINGS: dict[HookFormat, str] = {
-    "x_thread": "X thread opener",
-    "linkedin": "LinkedIn opener",
+    "x_thread": "X standalone post",
+    "linkedin": "LinkedIn short post",
     "reddit": "Reddit post title",
     "hn_comment": "HN comment seed",
     "devto_title": "Dev.to title",

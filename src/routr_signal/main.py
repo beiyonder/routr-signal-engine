@@ -317,6 +317,14 @@ def _enqueue_pending_hooks(
         fmt = getattr(hook, "format", None)
         if fmt not in AUTO_DISPATCHABLE_HOOK_FORMATS:
             continue
+        lint_result = voice_lint.lint_hook(hook)
+        if lint_result.violations:
+            warn(
+                "posts: skipped pending dispatch for lint-failing "
+                f"{fmt} hook (signal={getattr(hook, 'anchor_signal_id', None)}): "
+                f"{', '.join(lint_result.violations)}"
+            )
+            continue
         post_id = f"post-{_uuid.uuid4().hex[:12]}"
         signal_store.insert_post(
             post_id=post_id,

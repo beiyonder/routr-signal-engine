@@ -282,13 +282,14 @@ def check_markdown_render_determinism() -> None:
     rendered_a = markdown_digest.render(digest)
     rendered_b = markdown_digest.render(copy.deepcopy(digest))
     check("two renders of identical digest are byte-identical", rendered_a == rendered_b)
-    expected_sections = ["Routr Daily Signal Digest", "Top pain signals", "Pre-drafted post hooks", "X thread opener"]
+    expected_sections = ["Routr Daily Signal Digest", "Top pain signals", "Pre-drafted post hooks", "X standalone post"]
     missing = [s for s in expected_sections if s not in rendered_a]
     check(
         "render contains key sections",
         not missing,
         f"missing: {missing}" if missing else "",
     )
+    check("markdown digest does not call complete drafts openers", "opener" not in rendered_a.lower())
 
 
 def check_lead_extractor() -> None:
@@ -434,6 +435,9 @@ def check_discord_payload() -> None:
 
     messages = discord_out._build_messages(digest)
     check("at least one Discord message produced", len(messages) >= 1)
+    rendered_payload = json.dumps(messages, ensure_ascii=False)
+    check("Discord digest does not call complete drafts openers", "opener" not in rendered_payload.lower())
+    check("Discord digest labels x_thread as standalone", "X standalone post" in rendered_payload)
     for i, msg in enumerate(messages):
         check(
             f"message {i + 1}: <= {discord_out.MAX_EMBEDS_PER_MESSAGE} embeds",
@@ -464,6 +468,43 @@ def check_discord_payload() -> None:
     for raw, expected in cases:
         got = discord_out._normalize_url(raw)
         check(f"_normalize_url({raw!r}) → {expected!r}", got == expected, f"got {got!r}")
+
+
+def check_daily_dispatch_queue_respects_lint() -> None:
+    section("[7b] daily dispatch queue respects voice lint")
+
+    from routr_signal import main as pipeline_main
+    from routr_signal.lib import db as _db
+    from routr_signal.lib import signal_store as _ss
+
+    run_id = "validate-lint-queue"
+    conn = _db.get_db()
+    conn.execute("DELETE FROM posts WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+    conn.commit()
+
+    _ss.open_run(run_id, kind="daily")
+    bad_hook = PostHook(
+        format="x_thread",
+        anchor_signal_id="hn-bad",
+        text="some thoughts on llm gateway schema translation:",
+    )
+    pipeline_main._enqueue_pending_hooks(run_id, [bad_hook], ["msg-1"])
+    pending = [p for p in _ss.pending_posts_for_run(run_id) if p.get("run_id") == run_id]
+    check("lint-failing x_thread is not queued as pending dispatch", len(pending) == 0)
+
+    good_hook = PostHook(
+        format="x_thread",
+        anchor_signal_id="hn-good",
+        text="schema translation bugs look like model bugs until the proxy logs both wire formats.",
+    )
+    pipeline_main._enqueue_pending_hooks(run_id, [good_hook], ["msg-1"])
+    pending = [p for p in _ss.pending_posts_for_run(run_id) if p.get("run_id") == run_id]
+    check("lint-clean x_thread is still queued as pending dispatch", len(pending) == 1)
+
+    conn.execute("DELETE FROM posts WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+    conn.commit()
 
 
 # -----------------------------------------------------------------------------
@@ -1713,6 +1754,7 @@ def main() -> int:
     check_lead_extractor()
     check_pain_signal_fallback()
     check_discord_payload()
+    check_daily_dispatch_queue_respects_lint()
     check_distribution_modules()
     check_posts_table()
     check_new_sources_register()

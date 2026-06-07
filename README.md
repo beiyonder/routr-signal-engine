@@ -119,11 +119,11 @@ the raw JSONL normalization/enrichment files.
   - Angle: lead with their stated symptom, no pitch
 
 ## ✍️ Pre-drafted post hooks
-### X thread opener
-> "We measured the actual hidden token markups across OpenRouter, Anthropic, and OpenAI ..."
+### X standalone post
+> "provider routing bugs often look like model bugs until the proxy logs both wire formats. if openai-style tools pass but anthropic rejects the translated payload, debug the schema mapper before blaming the model."
 
-### LinkedIn opener
-> "Why your multi-LLM setup will break in production — and it's not the providers' fault."
+### LinkedIn short post
+> "Provider failover is mostly a state problem, not a model menu problem. The hard part is preserving request shape, retry budget, tool schema, and cache behavior across providers that expose different failure modes. A gateway that cannot show both wire formats is asking operators to debug routing blind."
 
 ### Reddit post title
 > "Benchmarked TypeScript vs Python LLM-proxy overhead across 50k requests — here's the cold-start delta"
