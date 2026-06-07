@@ -189,6 +189,8 @@ def run() -> int:
     if low_signal:
         digest.notes.append("low_signal_day: drafter fell back to long-running wedges")
     digest.hooks = hooks
+    if digest.pain_signals and not hooks and not low_signal:
+        digest.notes.append("post hooks unavailable: drafter returned no hooks")
 
     # 4a. Voice-lint the drafter output.
     if hooks:
@@ -197,6 +199,11 @@ def run() -> int:
         if lint_note:
             warn(lint_note)
             digest.notes.append(lint_note)
+
+    if not _digest_has_publishable_content(digest):
+        digest.notes.append(
+            "publish_skipped: no pain signals or post hooks; not publishing a normal daily digest"
+        )
 
     # 5. Persist digest locally (gitignored). The DB / runs table holds the canonical archive.
     md_path = markdown_digest.write_to_disk(digest)
@@ -210,7 +217,7 @@ def run() -> int:
 
     # 7. Publish
     discord_msg_ids: list[str] = []
-    if publish:
+    if publish and _digest_has_publishable_content(digest):
         ok_slack = slack.publish(digest)
         discord_msg_ids = discord.publish(digest)
         ok_email = email.publish(digest)
@@ -224,6 +231,8 @@ def run() -> int:
         if discord_msg_ids:
             signal_store.record_run_discord_messages(run_id, discord_msg_ids)
             _enqueue_pending_hooks(run_id, hooks, discord_msg_ids)
+    elif publish:
+        warn("publish: skipped normal daily digest because it has no pain signals or hooks")
     else:
         info("publish: skipped (ROUTR_SIGNAL_PUBLISH=0)")
 
@@ -262,6 +271,15 @@ def _build_digest(
     else:
         relevant = [c for c in classified if c.relevant and c.combined_score >= MIN_SCORE_FOR_DIGEST]
         relevant.sort(key=lambda c: c.combined_score, reverse=True)
+        if not relevant:
+            classifier_relevant = [c for c in classified if c.relevant]
+            if classifier_relevant:
+                notes = [
+                    *notes,
+                    "Digest score fallback: classifier found relevant items, but combined score threshold removed all of them; ranked by LLM score.",
+                ]
+                classifier_relevant.sort(key=lambda c: c.score, reverse=True)
+                relevant = classifier_relevant
         top_signals = relevant[:TOP_SIGNALS_FOR_DIGEST]
 
     leads = lead_extractor.extract(top_signals)
@@ -283,6 +301,10 @@ def _build_digest(
         source_counts=source_counts,
         notes=list(notes),
     )
+
+
+def _digest_has_publishable_content(digest: Digest) -> bool:
+    return bool(digest.pain_signals or digest.hooks)
 
 
 

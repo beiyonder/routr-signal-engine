@@ -51,7 +51,7 @@ def draft(
         response = call_json(system=system, user=payload, role="drafter")
     except Exception as e:  # noqa: BLE001
         warn(f"post_drafter.draft: drafter call failed: {e}")
-        return ([], True)
+        return ([], False)
 
     hooks = _parse_response(response)
     low_signal = bool(response.get("low_signal_day", False))

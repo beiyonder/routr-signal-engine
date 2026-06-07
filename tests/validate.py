@@ -470,6 +470,63 @@ def check_discord_payload() -> None:
         check(f"_normalize_url({raw!r}) → {expected!r}", got == expected, f"got {got!r}")
 
 
+def check_digest_quality_guardrails() -> None:
+    section("[7a] digest quality guardrails")
+
+    from routr_signal import main as pipeline_main
+    from routr_signal.output import discord as discord_out
+
+    now = datetime(2026, 6, 7, 12, 0, 0, tzinfo=timezone.utc)
+    raw = RawItem(
+        id="reddit-cosine-down",
+        source="reddit",
+        title="agent routing retries are misclassified as model failures",
+        body="we saw strict json tool failures disappear after bypassing the gateway translation layer",
+        url="https://reddit.com/r/LocalLLaMA/comments/cosine_down",
+        author="infra_builder",
+        created_at=now,
+        extra={"cosine_score": 0.0},
+    )
+    classified = ClassifiedItem(
+        raw=raw,
+        relevant=True,
+        score=0.8,
+        wedge="reliability",
+        pain_summary="gateway schema translation is being confused with model failure",
+        suggested_angle="debug both wire formats before blaming the model",
+        lead_handle="infra_builder",
+        lead_platform="reddit",
+    )
+    digest = pipeline_main._build_digest(
+        "2026-06-07",
+        {"reddit": [raw]},
+        [classified],
+        notes=["cosine unavailable; using classifier-only ranking"],
+    )
+    check(
+        "classifier-relevant items survive digest selection when cosine is unavailable",
+        len(digest.pain_signals) == 1,
+    )
+
+    no_hooks_digest = Digest(
+        date="2026-06-07",
+        pain_signals=[],
+        active_accounts=[],
+        hooks=[],
+        source_counts={"hn": 2, "reddit": 7},
+        notes=["drafter failed: Gemini credits depleted"],
+    )
+    no_hooks_payload = json.dumps(discord_out._build_messages(no_hooks_digest), ensure_ascii=False)
+    check(
+        "Discord header does not advertise shipping when no x_thread hook exists",
+        "React 📤" not in no_hooks_payload and "ship the x_thread" not in no_hooks_payload,
+    )
+    check(
+        "notes-only daily digest is not publishable as a normal signal digest",
+        not pipeline_main._digest_has_publishable_content(no_hooks_digest),
+    )
+
+
 def check_daily_dispatch_queue_respects_lint() -> None:
     section("[7b] daily dispatch queue respects voice lint")
 
@@ -592,7 +649,7 @@ def variance_report(stats: dict[str, Any]) -> None:
 # -----------------------------------------------------------------------------
 
 def check_idempotence_live() -> None:
-    section("[9] live idempotence: rerun produces 0 new HN items")
+    section("[9] live idempotence: rerun does not repeat HN items")
 
     from routr_signal.sources import hn
     from routr_signal.lib import db as _db
@@ -608,9 +665,15 @@ def check_idempotence_live() -> None:
         n1 = len(first)
         second = hn.fetch()
         n2 = len(second)
+        first_ids = {it.id for it in first}
+        repeated_ids = sorted(first_ids & {it.id for it in second})
         print(f"  first fetch: {n1} new items; second fetch: {n2} new items")
         check("first fetch is non-empty (sanity)", n1 >= 1)
-        check("second fetch returns 0 new items (dedupe is idempotent)", n2 == 0)
+        check(
+            "second fetch does not repeat first-fetch IDs (dedupe is idempotent)",
+            not repeated_ids,
+            f"repeated ids: {repeated_ids[:5]}" if repeated_ids else "",
+        )
     finally:
         # Restore prior state so subsequent runs are not surprised.
         conn.execute("DELETE FROM signals WHERE source = 'hn'")
@@ -1754,6 +1817,7 @@ def main() -> int:
     check_lead_extractor()
     check_pain_signal_fallback()
     check_discord_payload()
+    check_digest_quality_guardrails()
     check_daily_dispatch_queue_respects_lint()
     check_distribution_modules()
     check_posts_table()

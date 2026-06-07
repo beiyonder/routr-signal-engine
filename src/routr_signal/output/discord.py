@@ -203,10 +203,11 @@ def _header_content(digest: Digest) -> str:
         parts.append(f"Source counts: {bits}")
     # Make the ship-trigger explicit on every digest so there's no ambiguity
     # about which reaction actually posts to X. Casual ✅ / 👍 do nothing.
-    parts.append(
-        "_React 📤 on this message to ship the x_thread draft to X via Buffer. "
-        "✅ / 👍 are acknowledgments only; they do not post._"
-    )
+    if any(h.format == "x_thread" for h in digest.hooks):
+        parts.append(
+            "_React 📤 on this message to ship the X standalone post via Buffer. "
+            "✅ / 👍 are acknowledgments only; they do not post._"
+        )
     return "\n".join(parts)
 
 
